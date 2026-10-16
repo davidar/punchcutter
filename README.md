@@ -53,6 +53,14 @@ A consumer uploads two things and imports two modules.
    the arena, the requests, the UTF-8 bytes and two output arrays wherever it
    likes, and hands the handles over in a `ShapeTables`.
 
+The two modules are found through an include path.
+`punchcutter_core::slang_dir()` returns this repository's `slang/`, which
+holds `text.slang`, `shape.slang` and the two `shape.slang` imports. A build
+script that takes `punchcutter-core` as a build-dependency passes it to slangc
+as `-I`, and so does a process that compiles at run time. The path is fixed
+when `punchcutter-core` is compiled, so it names the checkout cargo built
+from: a path dependency's tree, or the git checkout in cargo's cache.
+
 Every face shares one merged glyph space: a fallback face reserves its whole
 glyph range, so its own tables index the merged ids by one addition and it
 kerns and substitutes with itself. docs/arena.md is the byte-level contract:
@@ -86,10 +94,6 @@ float coverage = textCoverage(glyph.gid,
 
 `slang/text_demo.slang` and `slang/shape_demo.slang` are complete minimal
 hosts for each module.
-
-A consumer's shader finds the modules through an include path:
-`punchcutter_core::slang_dir()` returns this repository's `slang/`, from a
-build script (with `punchcutter-core` as a build-dependency) or at run time.
 
 ## Building
 

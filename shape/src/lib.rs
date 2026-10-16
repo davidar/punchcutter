@@ -74,10 +74,11 @@ pub use abi::{
 pub use batch::{Batch, Feature};
 pub use font::{Arena, FaceInfo, FontError};
 
-/// The Slang modules this crate's arena is written for, relative to the
-/// workspace root. A shader imports the second, which imports the first.
-pub const SLANG_OT: &str = "slang/ot.slang";
-pub const SLANG_SHAPE: &str = "slang/shape.slang";
+/// The Slang modules this crate's arena is written for, as file names in
+/// [`punchcutter_core::slang_dir`]: `slang_dir().join(SLANG_SHAPE)`. A shader
+/// imports the second, which imports the first.
+pub const SLANG_OT: &str = "ot.slang";
+pub const SLANG_SHAPE: &str = "shape.slang";
 
 /// The entry point in `slang/shape_demo.slang` that the harness dispatches.
 pub const DEMO_ENTRY: &str = "shape_batch";
