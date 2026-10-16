@@ -5,7 +5,7 @@
 //! where each one landed. Four scalars come with them: the face's `unitsPerEm`,
 //! its glyph count, its `numberOfHMetrics`, and the merged glyph id its own
 //! id 0 sits at. Nothing here reads a lookup, a coverage table or a subtable
-//! format; `slang/shape.slang` walks OpenType's own bytes where they lie.
+//! format; `core/slang/shape.slang` walks OpenType's own bytes where they lie.
 //!
 //! Nothing here prepares a table, because any such step would be a second
 //! understanding of a lookup type that the shader already has to have. A

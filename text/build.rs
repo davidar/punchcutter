@@ -1,4 +1,4 @@
-//! Bakes `slang/text_demo.slang` — and with it `slang/text.slang`, which
+//! Bakes `core/slang/text_demo.slang` — and with it `core/slang/text.slang`, which
 //! it imports — into SPIR-V for the harness.
 //!
 //! The driver is `punchcutter_core::slang`. One entry point, one module, no
@@ -14,7 +14,7 @@ use punchcutter_core::slang;
 const ENTRY: &str = "text_demo";
 
 fn main() {
-    let modules = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../slang");
+    let modules = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../core/slang");
     let source = modules.join("text_demo.slang");
     let module = modules.join("text.slang");
 

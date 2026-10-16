@@ -548,7 +548,7 @@ pub fn compile_capturing(
         .args(["-entry", entry])
         .args(["-stage", "compute"])
         .arg("-fvk-use-entrypoint-name");
-    // Module search path: the engine's `slang/` and the source's own.
+    // Module search path: the engine's modules and the source's own.
     for include in includes {
         command.arg("-I").arg(include);
     }

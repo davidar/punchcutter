@@ -75,7 +75,7 @@ jobs:
       - name: The generated module matches its declarations
         run: |
           cargo run --locked -p punchcutter-shape --bin gen-slang
-          git diff --exit-code -- slang/shape_abi.slang
+          git diff --exit-code -- core/slang/shape_abi.slang
 
       - name: The render example, on lavapipe
         run: cargo run --locked -p punchcutter-text --example render

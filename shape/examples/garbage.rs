@@ -458,7 +458,7 @@ impl Gpu {
         let source = std::env::var_os("PUNCHCUTTER_SLANG_DIR")
             .map(PathBuf::from)
             .filter(|dir| dir.is_dir())
-            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../slang"))
+            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../core/slang"))
             .join("shape_demo.slang");
         let spirv = slang::compile(&source, punchcutter_shape::DEMO_ENTRY, &[], &[])
             .map_err(|err| anyhow::anyhow!("{err}"))?;

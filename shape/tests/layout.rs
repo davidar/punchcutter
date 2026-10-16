@@ -7,7 +7,7 @@
 //!
 //! A hand-kept Slang half would need a written-out list of every field and its
 //! offset here — the drift check a generator exists to make unnecessary.
-//! `slang/shape_abi.slang` is generated
+//! `core/slang/shape_abi.slang` is generated
 //! (`shape/src/abi.rs`, `the_checked_in_slang_is_the_rendering`), so what is
 //! left here is the one thing a generator cannot promise: that **slangc lays
 //! the rendered struct out the way Rust laid the declared one out**. The list
@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use punchcutter_core::slang::{self, SlangError};
 
 fn slang_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../slang")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../core/slang")
 }
 
 /// Whether a failure means "slangc is not installed", in which case the test

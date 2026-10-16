@@ -1,4 +1,4 @@
-//! The four buffers, as `#[repr(C)]` types `slang/text.slang` mirrors.
+//! The four buffers, as `#[repr(C)]` types `core/slang/text.slang` mirrors.
 //!
 //! Layout rules are the engine's (docs/arena.md, *Layout rules*): std430,
 //! every struct 16-byte aligned where it carries a vector, every reserved tail

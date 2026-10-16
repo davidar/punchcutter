@@ -21,7 +21,7 @@ pointer.
 - **GPU first.** The CPU keeps I/O; shaping, coverage and every table walk are
   the shaders'. No CPU shaper, not even a reference one (harfrust is the
   oracle, in an example).
-- **Slang, not WGSL**, for every shader. `slang/shape_abi.slang` is generated
+- **Slang, not WGSL**, for every shader. `core/slang/shape_abi.slang` is generated
   (`cargo run -p punchcutter-shape --bin gen-slang`); never edit it by hand.
 - **The GPU on this machine**: the harnesses pick an integrated or software
   adapter and refuse a discrete NVIDIA one; keep it that way.

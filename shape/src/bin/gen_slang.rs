@@ -1,8 +1,8 @@
-//! Writes `slang/shape_abi.slang` from the declarations in
+//! Writes `core/slang/shape_abi.slang` from the declarations in
 //! `shape/src/abi.rs` (docs/arena.md, *Declared once*).
 //!
 //! The file is checked in — a consumer and the harness run slangc against the
-//! checked-out `slang/`, and slangc resolves an import from the importing
+//! checked-out `core/slang/`, and slangc resolves an import from the importing
 //! file's own directory before any `-I` — so this is run by hand after a
 //! declaration changes. A test in the crate fails when the
 //! file on disk differs from the rendering, and names this command.
@@ -24,8 +24,8 @@ fn main() {
     );
 }
 
-/// The workspace's `slang/`, resolved against this crate so the command does
+/// The workspace's `core/slang/`, resolved against this crate so the command does
 /// not care about the working directory.
 fn slang_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../slang")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../core/slang")
 }

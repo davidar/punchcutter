@@ -53,7 +53,7 @@ use ttf_parser::opentype_layout::{
 /// The features whose lookups a closure starts from.
 ///
 /// HarfBuzz's default shaper list for horizontal text (the sixteen
-/// `slang/shape.slang` enables, plus `rvrn`), and the complex shapers'
+/// `core/slang/shape.slang` enables, plus `rvrn`), and the complex shapers'
 /// features — Arabic joining, Hangul jamo, the Indic and USE syllable
 /// features — because the face's tables go into the arena whole, and a cover
 /// filled for the default shaper should still be whole when a complex shaper

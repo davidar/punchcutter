@@ -13,7 +13,7 @@ The status bar in the caustics repository is its first consumer.
 
 ## What runs where
 
-**On the GPU**, in three Slang modules under `slang/`:
+**On the GPU**, in three Slang modules under `core/slang/`:
 
 - `text.slang`: Slug's coverage walk. Given a glyph id, a sample position and
   a size in pixels per em, it returns coverage in `[0, 1]`, computed from the
@@ -34,7 +34,7 @@ The status bar in the caustics repository is its first consumer.
 | `punchcutter-text` | a font's outlines, or an SVG's filled paths, into quadratic curves and Slug's band tables; the curve cache file; a face's `GSUB` closure | `Font`, `icon::load`, `Builder`, `CurveSet`, `Cached`, `font::codepoint_curves`, `closure::gsub_closure` |
 | `punchcutter-shape` | the five layout tables sliced out of the font file into one arena, unread; the batch of strings for a dispatch | `Arena`, `Batch`, `Feature`, the `abi` structs and flags |
 | `punchcutter-fonts` | fontconfig, the cache directory, and the fallback chain that merges other faces into the same glyph space | `Loaded`, `Merged`, `fallback::Chain` |
-| `punchcutter-core` | the slangc driver and its reflection, plain-bytes views, the declare-once ABI macros, wgpu helpers (`gpu` feature), where the Slang modules are | `slang`, `plain`, `decl`, `gpu::open_device`, `slang_dir` |
+| `punchcutter-core` | the slangc driver and its reflection, plain-bytes views, the declare-once ABI macros, wgpu helpers (`gpu` feature), and the Slang modules themselves | `slang`, `plain`, `decl`, `gpu::open_device`, `modules`, `slang_dir` |
 
 Nothing on the CPU reads a lookup, a coverage table or a subtable format: a
 new lookup type is an edit to a shader, never a second implementation.
@@ -53,13 +53,15 @@ A consumer uploads two things and imports two modules.
    the arena, the requests, the UTF-8 bytes and two output arrays wherever it
    likes, and hands the handles over in a `ShapeTables`.
 
-The two modules are found through an include path.
-`punchcutter_core::slang_dir()` returns this repository's `slang/`, which
-holds `text.slang`, `shape.slang` and the two `shape.slang` imports. A build
-script that takes `punchcutter-core` as a build-dependency passes it to slangc
-as `-I`, and so does a process that compiles at run time. The path is fixed
-when `punchcutter-core` is compiled, so it names the checkout cargo built
-from: a path dependency's tree, or the git checkout in cargo's cache.
+The two modules are found through an include path, and they travel inside
+`punchcutter-core`: `punchcutter_core::modules` holds `text.slang`,
+`shape.slang` and the two `shape.slang` imports as strings compiled into the
+crate, so a program runs with the engine it was built against and no checkout
+has to be where it was. A build script that takes `punchcutter-core` as a
+build-dependency writes them under `OUT_DIR` with `modules::write_to` and
+passes that directory to slangc as `-I`; a process that compiles at run time
+calls `punchcutter_core::slang_dir()`, which writes them once into
+`~/.cache/punchcutter/slang/<hash>/` and returns it.
 
 Every face shares one merged glyph space: a fallback face reserves its whole
 glyph range, so its own tables index the merged ids by one addition and it
@@ -92,7 +94,7 @@ float coverage = textCoverage(glyph.gid,
     textSampleAt(pixelCentre, origin, pxPerEm), pxPerEm);
 ```
 
-`slang/text_demo.slang` and `slang/shape_demo.slang` are complete minimal
+`core/slang/text_demo.slang` and `core/slang/shape_demo.slang` are complete minimal
 hosts for each module.
 
 ## Building
@@ -115,7 +117,7 @@ On an immutable host whose image lacks the unversioned `.so` symlinks the
 linker wants, point the linker at a directory that has them, for example
 `LIBRARY_PATH=/home/linuxbrew/.linuxbrew/lib cargo test --locked --workspace`.
 
-`slang/shape_abi.slang` is generated from `shape/src/abi.rs` and checked in.
+`core/slang/shape_abi.slang` is generated from `shape/src/abi.rs` and checked in.
 After changing a declaration, regenerate it; a test fails until you do:
 
 ```sh
@@ -187,7 +189,7 @@ variable-font instances. docs/roadmap.md has the list and the order.
 ## Licence
 
 MIT; see `LICENSE`. `NOTICE` credits the Slug reference shaders (MIT OR
-Apache-2.0), which `slang/text.slang` ports, and the Unicode data whose ranges
-`slang/shape.slang` writes out.
+Apache-2.0), which `core/slang/text.slang` ports, and the Unicode data whose ranges
+`core/slang/shape.slang` writes out.
 
 CONTRIBUTING.md has the rules for changes.

@@ -1104,7 +1104,7 @@ fn harfbuzz_corpus(gpu: &Gpu) -> Result<usize> {
                 }
                 // A font with no GPOS gets HarfBuzz's own fallback mark
                 // positioning, which shifts a mark back over the base it
-                // follows. The shader has none (`slang/shape.slang` says so in its header);
+                // follows. The shader has none (`core/slang/shape.slang` says so in its header);
                 // the ids and clusters still have to agree exactly, and the
                 // mark is GDEF's rather than Unicode's — which is what the
                 // aots cases need, their "marks" being control codepoints.
@@ -1398,7 +1398,7 @@ impl Gpu {
         let source = std::env::var_os("PUNCHCUTTER_SLANG_DIR")
             .map(PathBuf::from)
             .filter(|dir| dir.is_dir())
-            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../slang"))
+            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../core/slang"))
             .join("shape_demo.slang");
         let started = Instant::now();
         let spirv = slang::compile(&source, punchcutter_shape::DEMO_ENTRY, &[], &[])

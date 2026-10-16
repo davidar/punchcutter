@@ -4,7 +4,7 @@ use super::*;
 /// care about the harness's working directory. This crate sits one level down
 /// from the root, like every other member.
 fn slang_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../slang")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("slang")
 }
 
 /// The SPIR-V magic number, little-endian.

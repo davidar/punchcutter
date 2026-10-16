@@ -2,8 +2,8 @@
 
 This is the byte-level contract between the CPU side of the engine (the
 `punchcutter-text`, `punchcutter-shape` and `punchcutter-fonts` crates) and
-the three Slang modules a consumer's shader imports (`slang/text.slang`,
-`slang/shape.slang`, and `slang/ot.slang` beneath it). The CPU fills buffers;
+the three Slang modules a consumer's shader imports (`core/slang/text.slang`,
+`core/slang/shape.slang`, and `core/slang/ot.slang` beneath it). The CPU fills buffers;
 the consumer uploads them as they are; the modules read them. Nothing on the
 CPU side interprets a font table, and nothing on the GPU side trusts one.
 
@@ -281,7 +281,7 @@ measures what that costs.
 Every struct and constant above is written once, in Rust, through the
 `abi_struct!` and `abi_consts!` macros in `punchcutter_core::decl`. Each emits
 the Rust item and a table describing it; `cargo run -p punchcutter-shape --bin
-gen-slang` renders the tables into `slang/shape_abi.slang`, which is checked
+gen-slang` renders the tables into `core/slang/shape_abi.slang`, which is checked
 in because slangc resolves an import from the importing file's directory. A
 unit test fails when the file on disk differs from the rendering, and the
 layout test compares every bound struct's offsets with slangc's reflection.

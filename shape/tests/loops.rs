@@ -1,4 +1,4 @@
-//! A source lint over `slang/shape.slang` and `slang/ot.slang`: a rule about
+//! A source lint over `core/slang/shape.slang` and `core/slang/ot.slang`: a rule about
 //! the shader that no compiler checks and that a future edit would quietly
 //! break.
 

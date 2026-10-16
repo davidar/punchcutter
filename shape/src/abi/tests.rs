@@ -128,11 +128,12 @@ fn a_feature_word_has_room_for_its_on_bit() {
 ///
 /// It is checked in rather than generated at build time because slangc resolves
 /// an import from the importing file's own directory before any `-I`:
-/// a consumer and the harness hand it the checked-out `slang/`, and a
+/// a consumer and the harness hand it the checked-out `core/slang/`, and a
 /// file that only existed in `OUT_DIR` would not be there.
 #[test]
 fn the_checked_in_slang_is_the_rendering() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../slang/shape_abi.slang");
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../core/slang/shape_abi.slang");
     let on_disk = std::fs::read_to_string(&path)
         .unwrap_or_else(|err| panic!("could not read {}: {err}", path.display()));
     let rendered = slang_module();

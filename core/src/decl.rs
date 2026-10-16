@@ -14,7 +14,7 @@
 //! # Who declares through it
 //!
 //! The OpenType arena's header in `shape/src/abi.rs` is declared this way and
-//! rendered to `slang/shape_abi.slang` by `cargo run -p punchcutter-shape --bin
+//! rendered to `core/slang/shape_abi.slang` by `cargo run -p punchcutter-shape --bin
 //! gen-slang`. The mechanism lives here rather than in that crate so that a
 //! consumer can declare its own buffers the same way, without depending on the
 //! shaper.

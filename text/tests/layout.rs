@@ -14,7 +14,7 @@ use punchcutter_text::demo;
 use punchcutter_text::layout;
 
 fn demo_slang() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../slang/text_demo.slang")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../core/slang/text_demo.slang")
 }
 
 /// No slangc, no check, still green.
