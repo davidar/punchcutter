@@ -182,7 +182,7 @@ impl<F: Fn(f32, f32) -> [f32; 2]> Builder<F> {
     }
 }
 
-/// A cubic as a run of quadratics, within [`CUBIC_TOLERANCE`].
+/// A cubic as a run of quadratics, within `CUBIC_TOLERANCE`.
 ///
 /// The single best quadratic approximation of a cubic takes the control point
 /// `(3c1 + 3c2 - p0 - p3)/4`, and its error is bounded by `sqrt(3)/36` times

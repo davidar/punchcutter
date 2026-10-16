@@ -141,7 +141,7 @@ fn outline(face: &ttf_parser::Face<'_>, id: ttf_parser::GlyphId, upem: f32) -> V
 ///
 /// The fallback chain's unit of work. Nothing here decides anything: it is a
 /// codepoint, a face's bytes, and the curves that face draws for it — in **its
-/// own** em units, because [`outline`] divides by the face's `unitsPerEm` and
+/// own** em units, because `outline` divides by the face's `unitsPerEm` and
 /// the merged glyph space is em-normalised throughout. The advance is the one
 /// number that is not: it comes back in this face's ems and the caller rescales
 /// it to whatever design units the shaper's tables are in.

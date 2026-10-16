@@ -12,7 +12,7 @@ punchcutter-text = { path = "../text" }
 # The arena: `cmap`, `hmtx`, `GDEF`, `GSUB` and `GPOS` sliced out of the font
 # verbatim, behind a directory, one entry per face.
 punchcutter-shape = { path = "../shape" }
-# What a load or a cover could not do is reported here rather than printed.
 # The byte views a consumer uploads the curve buffers through.
 punchcutter-core = { path = "../core" }
+# What a load or a cover could not do is reported here rather than printed.
 tracing = "0.1"

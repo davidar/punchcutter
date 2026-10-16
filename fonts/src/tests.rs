@@ -9,9 +9,14 @@ use super::*;
 
 use crate::fallback::Chain;
 
+/// What the tests require of the primary face: two arrows, the degree sign,
+/// an en dash and an ellipsis. Noto Sans has no arrows, so this is also the
+/// list that proves a family lacking a glyph is passed over.
+const REQUIRED: &[char] = &['\u{2193}', '\u{2191}', '\u{00B0}', '\u{2013}', '\u{2026}'];
+
 /// The font this machine's fontconfig picks, or `None`.
 fn loaded() -> Option<Loaded> {
-    let (family, path) = pick_family(COMPOSED_CHARS)?;
+    let (family, path) = pick_family(REQUIRED)?;
     match Loaded::load_path(&family, &path) {
         Ok(loaded) => Some(loaded),
         Err(why) => {
@@ -441,7 +446,7 @@ fn a_copy_kept_by_tails_and_rewritten_records_stays_whole() {
 #[test]
 fn the_required_charset_is_asked_of_fontconfig_in_hex() {
     assert_eq!(
-        pattern_requiring("Noto Sans", COMPOSED_CHARS),
+        pattern_requiring("Noto Sans", REQUIRED),
         "Noto Sans:charset=2193 2191 b0 2013 2026"
     );
     assert_eq!(pattern_requiring("Noto Sans", &[]), "Noto Sans");

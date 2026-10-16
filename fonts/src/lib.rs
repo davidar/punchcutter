@@ -70,18 +70,6 @@ pub const UI_FAMILIES: &[&str] = &[
     "Liberation Sans",
 ];
 
-/// Characters a user interface commonly composes into runs of its own: the
-/// down and up arrows of a transfer rate, the degree sign, the en dash that
-/// stands for no value, and the ellipsis a cut label ends in.
-///
-/// A string a consumer shapes whole can be covered by a fallback face when the
-/// primary lacks a glyph; a run a shader composes on the GPU, out of glyphs it
-/// looked up itself, cannot, so the primary face has to carry these. Noto Sans
-/// has no arrows, and a UI shaped with it would show two boxes in a network
-/// line. [`Loaded::load`] asks for these; [`Loaded::load_requiring`] takes a
-/// consumer's own list.
-pub const COMPOSED_CHARS: &[char] = &['\u{2193}', '\u{2191}', '\u{00B0}', '\u{2013}', '\u{2026}'];
-
 // ---------------------------------------------------------------------------
 // The font
 // ---------------------------------------------------------------------------
@@ -119,14 +107,18 @@ pub struct Loaded {
 
 impl Loaded {
     /// Find a font and load it: `$PUNCHCUTTER_FONT` if it names one, else the
-    /// first of [`UI_FAMILIES`] fontconfig actually has with every one of
-    /// [`COMPOSED_CHARS`].
+    /// first of [`UI_FAMILIES`] fontconfig actually has.
     pub fn load() -> Result<Loaded, String> {
-        Loaded::load_requiring(COMPOSED_CHARS)
+        Loaded::load_requiring(&[])
     }
 
-    /// [`Self::load`], with the consumer's own list of characters the primary
-    /// face must carry.
+    /// [`Self::load`], with a list of characters the primary face must carry.
+    ///
+    /// A string a consumer shapes whole can be covered by a fallback face when
+    /// the primary lacks a glyph; a run a shader composes on the GPU, out of
+    /// glyphs it looked up itself, cannot, so the primary face has to carry
+    /// those characters. Which they are is the consumer's to say: fontconfig
+    /// is asked for them, and a family that lacks one is passed over.
     pub fn load_requiring(required: &[char]) -> Result<Loaded, String> {
         let (family, path) = match std::env::var_os(FONT_ENV) {
             Some(value) if !value.is_empty() => {

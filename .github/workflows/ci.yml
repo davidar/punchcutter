@@ -1,5 +1,5 @@
-# What a hosted runner can check: rustfmt, the build with warnings as errors, every
-# unit and integration test, the generated Slang module against its
+# What a hosted runner can check: rustfmt, the build and the docs with warnings
+# as errors, every unit and integration test, the generated Slang module against its
 # declarations, the render example and the conformance runner's UI corpus on
 # Mesa's software Vulkan, the link check and the scrub check. HarfBuzz's own
 # corpus is fetched and run locally (README.md, *The conformance runner*).
@@ -24,10 +24,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # fontconfig and sans-serif fonts for the tests that load one (they skip
-      # without one; Noto Sans lacks the arrows the font choice requires,
+      # without one; Noto Sans lacks the arrows the font tests require,
       # DejaVu Sans has them); lavapipe for the examples; spirv-val for the
       # compile tests.
       - name: System packages
@@ -39,7 +39,7 @@ jobs:
 
       - name: slangc
         id: slang
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/slang
           key: slang-${{ env.SLANG_VERSION }}-linux-x86_64
@@ -63,6 +63,12 @@ jobs:
       - name: Check, with warnings as errors
         run: cargo check --locked --workspace --all-targets
 
+      # Every intra-doc link resolves and none points at a private item.
+      - name: Docs, with warnings as errors
+        run: cargo doc --locked --workspace --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: -D warnings
+
       - name: Test
         run: cargo test --locked --workspace --no-fail-fast
 
@@ -79,7 +85,7 @@ jobs:
 
       - name: The rendered PNGs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: render
           path: text/test-runs/

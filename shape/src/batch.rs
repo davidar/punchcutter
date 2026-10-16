@@ -81,7 +81,7 @@ impl Batch {
     /// One slot per byte is wrong, and the HarfBuzz corpus shows why: a
     /// ligature removes glyphs, but a **MultipleSubst adds them**, and a
     /// context whose nested lookup is one turns two input glyphs into five.
-    /// A run that hits the cap comes back [`SHAPE_RUN_TRUNCATED`], which is
+    /// A run that hits the cap comes back [`SHAPE_RUN_TRUNCATED`](crate::abi::SHAPE_RUN_TRUNCATED), which is
     /// never a wrong answer but is not the answer either.
     pub fn push(&mut self, text: &str, px_size: f32) -> usize {
         self.push_with_features(text, px_size, &[])

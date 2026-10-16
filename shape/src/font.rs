@@ -84,7 +84,7 @@ pub struct FaceInfo {
     pub glyph_count: u32,
     pub upem: u32,
     pub num_h_metrics: u32,
-    /// `(offset, length)` for each of [`TABLES`], in that order.
+    /// `(offset, length)` for each of `TABLES`, in that order.
     pub tables: [(u32, u32); 5],
     /// Where the fill bitmap starts, or 0 when [`Self::all_filled`].
     pub filled_off: u32,

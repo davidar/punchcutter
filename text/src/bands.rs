@@ -165,7 +165,7 @@ impl Builder {
     /// set and rebased onto these buffers (the fallback chain's path).
     ///
     /// The band search is what a cache is for: nearly all of the preprocessing
-    /// time is [`choose_bands`] (the note beside `MAX_BANDS`), and the records
+    /// time is `choose_bands` (the note beside `MAX_BANDS`), and the records
     /// it produces are position-independent apart from three indices — a
     /// glyph's `band_base` into the band records, a band's `first` into the
     /// curve-location list, and a location into the point buffer. So a cached

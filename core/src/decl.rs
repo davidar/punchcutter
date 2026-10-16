@@ -2,9 +2,9 @@
 //! struct and constant of an ABI is written through, and the tables they
 //! build.
 //!
-//! [`abi_struct!`] emits the Rust struct *and* an [`AbiStruct`] describing it:
+//! [`abi_struct!`](crate::abi_struct) emits the Rust struct *and* an [`AbiStruct`] describing it:
 //! its name, its `///` text, its fields with the Slang type each renders as,
-//! and a function giving `offset_of!` for every field. [`abi_consts!`] emits a
+//! and a function giving `offset_of!` for every field. [`abi_consts!`](crate::abi_consts) emits a
 //! group of constants *and* a [`ConstGroup`] describing them. [`render`] turns
 //! those tables into a Slang module, which is **checked in** and compared
 //! against the rendering by a test — so the Slang half is written by the Rust half and never kept by hand.
@@ -55,7 +55,7 @@ impl SlangTy {
     }
 }
 
-/// The Slang name of a type a field may have. Implemented for the three scalars here and for every ABI struct by [`abi_struct!`].
+/// The Slang name of a type a field may have. Implemented for the three scalars here and for every ABI struct by [`abi_struct!`](crate::abi_struct).
 pub trait SlangType {
     const NAME: &'static str;
 }
