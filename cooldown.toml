@@ -1,0 +1,10 @@
+# cargo-cooldown policy: refuse registry versions published <7 days ago.
+# Rationale: a malicious crate version is usually yanked within hours or
+# days of publication; a week-old floor sidesteps most of them.
+# Versions already in Cargo.lock are exempt (lockfile-baseline = floor).
+[cooldown]
+incompatible-publish-age = "deny"
+lockfile-baseline = "floor"
+
+[registry]
+global-min-publish-age = "7 days"

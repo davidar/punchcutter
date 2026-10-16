@@ -1,0 +1,39 @@
+[package]
+name = "punchcutter-shape"
+version = "0.1.0"
+edition.workspace = true
+description = "OpenType Layout as a Slang compute module: the CPU slices cmap, hmtx, GDEF, GSUB and GPOS out of the font verbatim, and the GPU walks them"
+license.workspace = true
+rust-version.workspace = true
+
+# The generator: `cargo run -p punchcutter-shape --bin gen-slang`
+# writes `slang/shape_abi.slang` from the declarations in `src/abi.rs`.
+# Spelled out because the hyphen is the command's.
+[[bin]]
+name = "gen-slang"
+path = "src/bin/gen_slang.rs"
+
+[dependencies]
+# The `Plain` byte views and the declare-once macros, so the buffer types here
+# upload the same way every other buffer does. Featureless: nothing in this
+# library touches wgpu.
+punchcutter-core = { path = "../core" }
+# The sfnt table directory, and nothing else: `RawFace::table` finds a table by
+# tag and hands back its bytes. Reading a font file into data is I/O, which is
+# the CPU's half of the engine. No lookup, no coverage table, no subtable
+# format is read on this side.
+ttf-parser = "0.25.1"
+
+[dev-dependencies]
+anyhow = "1"
+# The oracle the conformance runner checks the GPU shaper against, glyph for
+# glyph and position for position with a tolerance of zero: HarfBuzz's own Rust
+# port. It is compared against directly, whole string, rather than through a
+# text library, which splits a line into words before it shapes and so hides
+# cross-word lookups.
+harfrust = "0.12.0"
+# The slangc driver (compile + reflect) for the harness and the layout test.
+# `gpu` for the pipeline helpers.
+punchcutter-core = { path = "../core", features = ["gpu"] }
+pollster = "0.4"
+wgpu = "30"

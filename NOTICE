@@ -1,0 +1,71 @@
+This project is licensed under the MIT License (see LICENSE). It contains
+material from, or written from, the following third-party works.
+
+Slug
+----
+
+The glyph coverage in slang/text.slang (`textRootCode`,
+`textSolveHoriz`, `textSolveVert`, `textCombine` and the two band loops in
+`textCoverageAniso`) is a port of the Slug reference pixel shader by Eric
+Lengyel, published at https://github.com/EricLengyel/Slug. The reference
+shaders are offered under the MIT License (the source header states
+"MIT OR Apache-2.0"), with the request that distributed use give credit:
+
+    Slug shader code Copyright 2017 by Eric Lengyel.
+    SPDX-License-Identifier: MIT OR Apache-2.0
+
+The algorithm is described in Eric Lengyel, "GPU-Centered Font Rendering
+Directly from Glyph Outlines", Journal of Computer Graphics Techniques 6(2),
+2017, https://jcgt.org/published/0006/02/02/. Its patent, US 10,373,352, was
+dedicated to the public domain by its author effective 17 March 2026, as
+announced at https://terathon.com/blog/decade-slug.html.
+
+The band preprocessing in text/src/bands.rs is this project's own, written
+from the paper.
+
+Unicode
+-------
+
+slang/shape.slang writes out the ranges of the Unicode
+Default_Ignorable_Code_Point property. The Unicode Character Database is
+covered by the Unicode License v3:
+
+    UNICODE LICENSE V3
+
+    COPYRIGHT AND PERMISSION NOTICE
+
+    Copyright © 1991-2026 Unicode, Inc.
+
+    NOTICE TO USER: Carefully read the following legal agreement. BY
+    DOWNLOADING, INSTALLING, COPYING OR OTHERWISE USING DATA FILES, AND/OR
+    SOFTWARE, YOU UNEQUIVOCALLY ACCEPT, AND AGREE TO BE BOUND BY, ALL OF THE
+    TERMS AND CONDITIONS OF THIS AGREEMENT. IF YOU DO NOT AGREE, DO NOT
+    DOWNLOAD, INSTALL, COPY, DISTRIBUTE OR USE THE DATA FILES OR SOFTWARE.
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of data files and any associated documentation (the "Data Files") or
+    software and any associated documentation (the "Software") to deal in the
+    Data Files or Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, and/or sell
+    copies of the Data Files or Software, and to permit persons to whom the
+    Data Files or Software are furnished to do so, provided that either (a)
+    this copyright and permission notice appear with all copies of the Data
+    Files or Software, or (b) this copyright and permission notice appear in
+    associated Documentation.
+
+    THE DATA FILES AND SOFTWARE ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
+    KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+    MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF
+    THIRD PARTY RIGHTS.
+
+    IN NO EVENT SHALL THE COPYRIGHT HOLDER OR HOLDERS INCLUDED IN THIS NOTICE
+    BE LIABLE FOR ANY CLAIM, OR ANY SPECIAL INDIRECT OR CONSEQUENTIAL DAMAGES,
+    OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
+    WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+    ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THE DATA
+    FILES OR SOFTWARE.
+
+    Except as contained in this notice, the name of a copyright holder shall
+    not be used in advertising or otherwise to promote the sale, use or other
+    dealings in these Data Files or Software without prior written
+    authorization of the copyright holder.

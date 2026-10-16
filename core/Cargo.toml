@@ -1,0 +1,31 @@
+[package]
+name = "punchcutter-core"
+version = "0.1.0"
+edition.workspace = true
+description = "The machinery under the engine's shaders: the slangc driver and its reflection, plain-bytes views, the declare-once ABI renderer and the wgpu helpers"
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# Two macros in the slangc driver, a few in the GPU helpers. The crate is
+# otherwise std-only, which is what lets a build script depend on it.
+tracing = "0.1"
+# Only the `gpu` feature's helpers touch wgpu, so a build script can depend on
+# this crate without dragging the graphics stack into the build graph.
+wgpu = { version = "30", optional = true }
+# Vulkan's own types, for the one thing wgpu cannot ask for on its own:
+# `VK_KHR_shader_clock`, which is what lets the shaper hold a wall-clock
+# deadline inside the kernel, so a pathological font cannot hold the GPU past it.
+# Reached through wgpu-hal's device-creation callback, so the version is
+# wgpu-hal 30's own.
+ash = { version = "0.38.0", optional = true }
+# slangc's reflection is JSON: the layout tests read struct offsets out of it,
+# and a consumer reads its bindings and its `getStringHash` table.
+serde_json = "1"
+# `request_device` is a future and this crate is not async.
+pollster = { version = "0.4", optional = true }
+
+[features]
+default = []
+# The wgpu-typed helpers: device creation, pipelines, storage buffers.
+gpu = ["dep:wgpu", "dep:ash", "dep:pollster"]

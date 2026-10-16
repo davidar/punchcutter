@@ -1,0 +1,39 @@
+[package]
+name = "punchcutter-text"
+version = "0.1.0"
+edition.workspace = true
+description = "Glyphs and icons as curves: Slug's band tables built on the CPU, the per-pixel coverage walk in Slang"
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow = "1"
+# The `Plain` byte views, so the buffers this crate packs reach a GPU the same
+# way every other buffer does. Featureless: nothing in the library itself
+# touches wgpu; the harness does, and takes the `gpu` feature below.
+punchcutter-core = { path = "../core" }
+tracing = "0.1"
+# Outline extraction only: `glyf` quadratics, CFF cubics, `hmtx` advances,
+# `fvar` defaults, and the `GSUB` walk of the closure. No shaping (that is
+# `punchcutter-shape`), no rasteriser, no font enumeration.
+ttf-parser = "0.25.1"
+# The icon loader's only job is turning an SVG's filled paths into the same
+# contours a glyph produces. Unlike resvg, nothing here rasterises.
+usvg = "0.48.1"
+
+[build-dependencies]
+# The demo shader is baked through the same slangc driver
+# (`punchcutter_core::slang`) a consumer's build script would use. Featureless:
+# a build script has no business pulling wgpu in.
+punchcutter-core = { path = "../core" }
+
+[dev-dependencies]
+# The harness is headless wgpu (`gpu`), and the layout test parses slangc's
+# reflection JSON.
+punchcutter-core = { path = "../core", features = ["gpu"] }
+png = "0.18.1"
+pollster = "0.4"
+# The comparison raster. swash rasterises the same outlines on the CPU for the
+# harness to check against, and it never leaves the dev-dependencies.
+swash = "0.2.10"
+wgpu = "30"

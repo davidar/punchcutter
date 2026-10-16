@@ -1,0 +1,8 @@
+/target
+
+# Editor droppings
+.*.sw[a-p]
+*~
+
+# Images the render example writes
+text/test-runs/

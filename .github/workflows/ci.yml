@@ -1,0 +1,91 @@
+# What a hosted runner can check: rustfmt, the build with warnings as errors, every
+# unit and integration test, the generated Slang module against its
+# declarations, the render example and the conformance runner's UI corpus on
+# Mesa's software Vulkan, the link check and the scrub check. HarfBuzz's own
+# corpus is fetched and run locally (README.md, *The conformance runner*).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  SLANG_VERSION: "2026.14.1"
+
+jobs:
+  check-and-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # fontconfig and sans-serif fonts for the tests that load one (they skip
+      # without one; Noto Sans lacks the arrows the font choice requires,
+      # DejaVu Sans has them); lavapipe for the examples; spirv-val for the
+      # compile tests.
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            fontconfig fonts-noto-core fonts-dejavu-core \
+            mesa-vulkan-drivers libvulkan1 spirv-tools
+
+      - name: slangc
+        id: slang
+        uses: actions/cache@v4
+        with:
+          path: ~/slang
+          key: slang-${{ env.SLANG_VERSION }}-linux-x86_64
+      - name: slangc (download)
+        if: steps.slang.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/slang
+          curl -sSfL "https://github.com/shader-slang/slang/releases/download/v${SLANG_VERSION}/slang-${SLANG_VERSION}-linux-x86_64.tar.gz" \
+            | tar -xz -C ~/slang
+      - name: slangc (on PATH)
+        run: |
+          echo "$HOME/slang/bin" >> "$GITHUB_PATH"
+          ~/slang/bin/slangc -v
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check, with warnings as errors
+        run: cargo check --locked --workspace --all-targets
+
+      - name: Test
+        run: cargo test --locked --workspace --no-fail-fast
+
+      - name: The generated module matches its declarations
+        run: |
+          cargo run --locked -p punchcutter-shape --bin gen-slang
+          git diff --exit-code -- slang/shape_abi.slang
+
+      - name: The render example, on lavapipe
+        run: cargo run --locked -p punchcutter-text --example render
+
+      - name: The conformance runner's UI corpus, on lavapipe
+        run: cargo run --locked -p punchcutter-shape --example conform -- --ui-only
+
+      - name: The rendered PNGs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: render
+          path: text/test-runs/
+          if-no-files-found: ignore
+
+      - name: Links and scrub
+        run: |
+          docs/check-links.sh
+          tools/scrub-check.sh ':!LICENSE'

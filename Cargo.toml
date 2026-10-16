@@ -1,0 +1,22 @@
+[workspace]
+# The engine's four crates: the curves, the shaping arena, the Slang and wgpu
+# machinery both are built on, and finding and merging fonts.
+members = ["core", "fonts", "shape", "text"]
+# The edition-2024 default, stated because it matters here: `text` depends on
+# `punchcutter-core` without features from its build script and with `gpu` from
+# its tests and examples, and only resolver 2 or later keeps a build script's
+# graph from pulling in wgpu.
+resolver = "3"
+
+# Every member inherits these, so the licence, the edition and the oldest
+# toolchain that builds the tree are stated once. The rust-version is the
+# highest any dependency declares (wgpu).
+[workspace.package]
+edition = "2024"
+license = "MIT"
+rust-version = "1.87"
+
+[profile.dev]
+# The tests and the examples run the debug build, so it gets the cheap
+# optimisations: the band search over a whole font is noticeably slow at -O0.
+opt-level = 1

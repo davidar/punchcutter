@@ -1,0 +1,18 @@
+[package]
+name = "punchcutter-fonts"
+version = "0.1.0"
+edition.workspace = true
+description = "Finding a font through fontconfig and loading it into the engine: the curve buffers (cached), the shaping arena, and the fallback faces that cover what the primary lacks"
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# The curves, their cache file, the per-codepoint readers and the GSUB closure.
+punchcutter-text = { path = "../text" }
+# The arena: `cmap`, `hmtx`, `GDEF`, `GSUB` and `GPOS` sliced out of the font
+# verbatim, behind a directory, one entry per face.
+punchcutter-shape = { path = "../shape" }
+# What a load or a cover could not do is reported here rather than printed.
+# The byte views a consumer uploads the curve buffers through.
+punchcutter-core = { path = "../core" }
+tracing = "0.1"
