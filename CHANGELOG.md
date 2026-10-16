@@ -36,4 +36,5 @@ filled.
 **Machinery** (`punchcutter-core`). The slangc driver with its reflection
 (struct offsets, bindings, `getStringHash` literals), plain-bytes upload
 views, the declare-once macros that generate `slang/shape_abi.slang`, and wgpu
-helpers including a device opened with `VK_KHR_shader_clock`.
+helpers including a device opened with `VK_KHR_shader_clock`. `slang_dir()`
+names the directory of Slang modules, for a consumer's include path.

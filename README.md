@@ -34,7 +34,7 @@ The status bar in the caustics repository is its first consumer.
 | `punchcutter-text` | a font's outlines, or an SVG's filled paths, into quadratic curves and Slug's band tables; the curve cache file; a face's `GSUB` closure | `Font`, `icon::load`, `Builder`, `CurveSet`, `Cached`, `font::codepoint_curves`, `closure::gsub_closure` |
 | `punchcutter-shape` | the five layout tables sliced out of the font file into one arena, unread; the batch of strings for a dispatch | `Arena`, `Batch`, `Feature`, the `abi` structs and flags |
 | `punchcutter-fonts` | fontconfig, the cache directory, and the fallback chain that merges other faces into the same glyph space | `Loaded`, `Merged`, `fallback::Chain` |
-| `punchcutter-core` | the slangc driver and its reflection, plain-bytes views, the declare-once ABI macros, wgpu helpers (`gpu` feature) | `slang`, `plain`, `decl`, `gpu::open_device` |
+| `punchcutter-core` | the slangc driver and its reflection, plain-bytes views, the declare-once ABI macros, wgpu helpers (`gpu` feature), where the Slang modules are | `slang`, `plain`, `decl`, `gpu::open_device`, `slang_dir` |
 
 Nothing on the CPU reads a lookup, a coverage table or a subtable format: a
 new lookup type is an edit to a shader, never a second implementation.
@@ -86,6 +86,10 @@ float coverage = textCoverage(glyph.gid,
 
 `slang/text_demo.slang` and `slang/shape_demo.slang` are complete minimal
 hosts for each module.
+
+A consumer's shader finds the modules through an include path:
+`punchcutter_core::slang_dir()` returns this repository's `slang/`, from a
+build script (with `punchcutter-core` as a build-dependency) or at run time.
 
 ## Building
 
