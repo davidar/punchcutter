@@ -17,7 +17,7 @@
 //! - [`decl`] — **declared once**: the two `macro_rules!` an ABI struct or
 //!   constant is written through, and the renderer that turns their tables into
 //!   a checked-in Slang module.
-//! - [`gpu`] — the wgpu-typed helpers, behind the `gpu` feature, so a build
+//! - `gpu` — the wgpu-typed helpers, behind the `gpu` feature, so a build
 //!   script can depend on this crate without pulling in wgpu.
 //!
 //! And one function, [`slang_dir`]: where the engine's Slang modules are, for
