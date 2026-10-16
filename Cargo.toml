@@ -10,11 +10,12 @@ resolver = "3"
 
 # Every member inherits these, so the licence, the edition and the oldest
 # toolchain that builds the tree are stated once. The rust-version is the
-# highest any dependency declares (wgpu).
+# language's: `if let … && let …` chains, which 1.88 stabilised for edition
+# 2024, are used throughout. No dependency asks for more (wgpu wants 1.87).
 [workspace.package]
 edition = "2024"
 license = "MIT"
-rust-version = "1.87"
+rust-version = "1.88"
 
 [profile.dev]
 # The tests and the examples run the debug build, so it gets the cheap

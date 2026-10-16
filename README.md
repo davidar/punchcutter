@@ -99,7 +99,7 @@ hosts for each module.
 
 - **slangc** on `PATH` (or `$SLANGC` naming it). CI uses Slang 2026.14.1 from
   the release tarball. `spirv-val` from SPIRV-Tools is used when present.
-- **Rust** 1.87 or later. `Cargo.lock` is committed; build with `--locked`.
+- **Rust** 1.88 or later. `Cargo.lock` is committed; build with `--locked`.
 - **Vulkan** with wgpu's `PASSTHROUGH_SHADERS` for the examples and the GPU
   tests. The shaper's SPIR-V uses `VK_KHR_shader_clock`, which
   `punchcutter_core::gpu::open_device` enables. Mesa's lavapipe works.
