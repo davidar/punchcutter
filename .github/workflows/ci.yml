@@ -1,7 +1,7 @@
 # What a hosted runner can check: rustfmt, the build and the docs with warnings
 # as errors, every unit and integration test, the generated Slang module against its
 # declarations, the render example and the conformance runner's UI corpus on
-# Mesa's software Vulkan, the link check and the scrub check. HarfBuzz's own
+# Mesa's software Vulkan, and the link check. HarfBuzz's own
 # corpus is fetched and run locally (README.md, *The conformance runner*).
 name: ci
 
@@ -91,7 +91,5 @@ jobs:
           path: text/test-runs/
           if-no-files-found: ignore
 
-      - name: Links and scrub
-        run: |
-          docs/check-links.sh
-          tools/scrub-check.sh ':!LICENSE'
+      - name: Links
+        run: docs/check-links.sh

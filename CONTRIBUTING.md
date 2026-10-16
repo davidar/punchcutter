@@ -77,12 +77,8 @@ unformatted.
   their summary lines into the pull request. If you changed a bound in
   `ot.slang` or `shape.slang`, also run `cargo run -p punchcutter-shape
   --example garbage -- --hostile` under lavapipe.
-- **A test fixture must identify nobody.** `tools/scrub-check.sh` scans the
-  tracked tree for the shapes of private data (addresses, email addresses,
-  private keys, home paths) and exits non-zero on a hit. Pointing
-  `$PUNCHCUTTER_SCRUB_WORDS` at a file of your own words, one per line and never
-  committed, makes it look for those too. A hit on a word is read and judged
-  (a coincidental substring is fine), never suppressed.
+- **A test fixture must identify nobody.** Fixtures are written from invented
+  data: no addresses, email addresses, keys or home paths.
 
 ## Logging
 

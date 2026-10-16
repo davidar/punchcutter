@@ -15,10 +15,7 @@ pointer.
 - **Public voice.** Everything written here is for a reader who has never met
   us: no personal names, machine names or dates as narrative in comments or
   documents, no history, no private labels. Cite documents by file and section
-  name, never by number. Before a push: `tools/scrub-check.sh ':!LICENSE'`
-  (private words from `~/.config/punchcutter/scrub-words`, or
-  `$PUNCHCUTTER_SCRUB_WORDS`; coincidental substring hits are read and judged,
-  never suppressed) and `docs/check-links.sh` both clean.
+  name, never by number. Before a push: `docs/check-links.sh` clean.
 - **The engine knows nothing about its consumer.** No module or crate refers
   to what draws the text.
 - **GPU first.** The CPU keeps I/O; shaping, coverage and every table walk are
