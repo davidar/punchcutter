@@ -11,8 +11,8 @@
 // strings.
 //
 // It is also what the reflection test compiles: `shape/tests/layout.rs` reflects
-// `shape_batch` and compares slangc's own per-field byte offsets against
-// `offset_of!` on the Rust side, which is how slangc's layout of
+// `shape_batch` and compares Slang's own per-field byte offsets against
+// `offset_of!` on the Rust side, which is how Slang's layout of
 // `shape_abi.slang` is kept equal to `shape/src/abi.rs`.
 
 import shape;

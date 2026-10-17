@@ -161,7 +161,7 @@ public bool otFilled(OtArena a, OtFace f, uint local_gid)
 /// One byte, or zero past the arena.
 ///
 /// Written **branchless** on purpose. Every `be16` is two of these and every
-/// `be32` is four, and slangc inlines the lot — a function taking an `OtArena`
+/// `be32` is four, and Slang inlines the lot — a function taking an `OtArena`
 /// takes a descriptor, and SPIR-V has no way to pass one, so there is no
 /// version of this module in which these are calls. At three thousand copies a compile, an `if` here would be three thousand extra basic blocks; the clamp and the select are two instructions and no branch.
 public uint otByte(OtArena a, uint off)

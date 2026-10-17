@@ -13,7 +13,7 @@ The status bar in the caustics repository is its first consumer.
 
 ## What runs where
 
-**On the GPU**, in three Slang modules under `core/slang/`:
+**On the GPU**, in three Slang modules under `slang/modules/`:
 
 - `text.slang`: Slug's coverage walk. Given a glyph id, a sample position and
   a size in pixels per em, it returns coverage in `[0, 1]`, computed from the
@@ -34,7 +34,8 @@ The status bar in the caustics repository is its first consumer.
 | `punchcutter-text` | a font's outlines, or an SVG's filled paths, into quadratic curves and Slug's band tables; the curve cache file; a face's `GSUB` closure | `Font`, `icon::load`, `Builder`, `CurveSet`, `Cached`, `font::codepoint_curves`, `closure::gsub_closure` |
 | `punchcutter-shape` | the five layout tables sliced out of the font file into one arena, unread; the batch of strings for a dispatch | `Arena`, `Batch`, `Feature`, the `abi` structs and flags |
 | `punchcutter-fonts` | fontconfig, the cache directory, and the fallback chain that merges other faces into the same glyph space | `Loaded`, `Merged`, `fallback::Chain` |
-| `punchcutter-core` | the slangc driver and its reflection, plain-bytes views, the declare-once ABI macros, wgpu helpers (`gpu` feature), and the Slang modules themselves | `slang`, `plain`, `decl`, `gpu::open_device`, `modules`, `slang_dir` |
+| `punchcutter-slang` | the Slang modules themselves, and the compiler that builds a shader against them in process: SPIR-V, reflection (bindings, struct offsets, the `getStringHash` table) | `compile`, `compile_program`, `reflect`, `Program`, `Reflection`, `modules` |
+| `punchcutter-core` | plain-bytes views, the declare-once ABI macros, wgpu helpers (`gpu` feature); std-only | `plain`, `decl`, `gpu::open_device` |
 
 Nothing on the CPU reads a lookup, a coverage table or a subtable format: a
 new lookup type is an edit to a shader, never a second implementation.
@@ -53,15 +54,15 @@ A consumer uploads two things and imports two modules.
    the arena, the requests, the UTF-8 bytes and two output arrays wherever it
    likes, and hands the handles over in a `ShapeTables`.
 
-The two modules are found through an include path, and they travel inside
-`punchcutter-core`: `punchcutter_core::modules` holds `text.slang`,
-`shape.slang` and the two `shape.slang` imports as strings compiled into the
-crate, so a program runs with the engine it was built against and no checkout
-has to be where it was. A build script that takes `punchcutter-core` as a
-build-dependency writes them under `OUT_DIR` with `modules::write_to` and
-passes that directory to slangc as `-I`; a process that compiles at run time
-calls `punchcutter_core::slang_dir()`, which writes them once into
-`~/.cache/punchcutter/slang/<hash>/` and returns it.
+The two modules travel inside `punchcutter-slang`, and so does the
+compiler: `punchcutter_slang::compile_program` compiles a shader's entry
+points to SPIR-V in process, with `text.slang`, `shape.slang` and the two
+`shape.slang` imports on its search path, so a program runs with the engine
+it was built against, no checkout has to be where it was, and nothing has to
+be installed. The same call serves a build script, a test and a program that
+recompiles its shader at run time, and it comes back with the program's
+reflection: every binding, every struct's field offsets, and the literal
+behind every `getStringHash`.
 
 Every face shares one merged glyph space: a fallback face reserves its whole
 glyph range, so its own tables index the merged ids by one addition and it
@@ -94,13 +95,16 @@ float coverage = textCoverage(glyph.gid,
     textSampleAt(pixelCentre, origin, pxPerEm), pxPerEm);
 ```
 
-`core/slang/text_demo.slang` and `core/slang/shape_demo.slang` are complete minimal
+`slang/modules/text_demo.slang` and `slang/modules/shape_demo.slang` are complete minimal
 hosts for each module.
 
 ## Building
 
-- **slangc** on `PATH` (or `$SLANGC` naming it). CI uses Slang 2026.14.1 from
-  the release tarball. `spirv-val` from SPIRV-Tools is used when present.
+- **Slang** needs no installing: `punchcutter-slang` carries the pinned
+  official release (2026.14.1) inside the binary, through the `shader-slang`
+  crate, whose build downloads the release archive once and checks it against
+  a pinned SHA-256 (`SLANG_RELEASE_ARCHIVE=<path>` builds from a prefetched
+  copy, offline). `spirv-val` from SPIRV-Tools is used when present.
 - **Rust** 1.88 or later. `Cargo.lock` is committed; build with `--locked`.
 - **Vulkan** with wgpu's `PASSTHROUGH_SHADERS` for the examples and the GPU
   tests. The shaper's SPIR-V uses `VK_KHR_shader_clock`, which
@@ -117,7 +121,7 @@ On an immutable host whose image lacks the unversioned `.so` symlinks the
 linker wants, point the linker at a directory that has them, for example
 `LIBRARY_PATH=/home/linuxbrew/.linuxbrew/lib cargo test --locked --workspace`.
 
-`core/slang/shape_abi.slang` is generated from `shape/src/abi.rs` and checked in.
+`slang/modules/shape_abi.slang` is generated from `shape/src/abi.rs` and checked in.
 After changing a declaration, regenerate it; a test fails until you do:
 
 ```sh
@@ -189,7 +193,7 @@ variable-font instances. docs/roadmap.md has the list and the order.
 ## Licence
 
 MIT; see `LICENSE`. `NOTICE` credits the Slug reference shaders (MIT OR
-Apache-2.0), which `core/slang/text.slang` ports, and the Unicode data whose ranges
-`core/slang/shape.slang` writes out.
+Apache-2.0), which `slang/modules/text.slang` ports, and the Unicode data whose ranges
+`slang/modules/shape.slang` writes out.
 
 CONTRIBUTING.md has the rules for changes.

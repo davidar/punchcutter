@@ -32,8 +32,9 @@ anyhow = "1"
 # text library, which splits a line into words before it shapes and so hides
 # cross-word lookups.
 harfrust = "0.12.0"
-# The slangc driver (compile + reflect) for the harness and the layout test.
-# `gpu` for the pipeline helpers.
+# The pipeline helpers (`gpu`) for the harness, and the compiler (compile +
+# reflect) for the harness and the layout test.
 punchcutter-core = { path = "../core", features = ["gpu"] }
+punchcutter-slang = { path = "../slang" }
 pollster = "0.4"
 wgpu = "30"

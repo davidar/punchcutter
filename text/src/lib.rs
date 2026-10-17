@@ -4,7 +4,7 @@
 //! over data the GPU can hold belongs in a shader. A font file is I/O. Turning
 //! its outlines into coverage is computation. So this crate reads a font once,
 //! flattens it to quadratic Béziers with Slug's band tables beside them, and
-//! hands the whole thing over as four storage buffers; `core/slang/text.slang`
+//! hands the whole thing over as four storage buffers; `slang/modules/text.slang`
 //! does the rest, per pixel, at whatever size the caller asks for.
 //!
 //! So there is no glyph atlas, no packer or eviction, no per-size
@@ -17,7 +17,7 @@
 //! Outlines*, [JCGT 6(2), 2017](https://jcgt.org/published/0006/02/02/). The
 //! patent was permanently dedicated to the public domain, and the reference vertex and pixel shaders are published at
 //! <https://github.com/EricLengyel/Slug> under MIT OR Apache-2.0, with the
-//! condition that distributed use gives credit. `core/slang/text.slang` carries
+//! condition that distributed use gives credit. `slang/modules/text.slang` carries
 //! that credit in its header and is a port of the reference pixel shader; the preprocessing here ([`bands`]) is this crate's own, written from the paper and the
 //! repository's own notes, because the reference publishes no preprocessor.
 //!
@@ -40,7 +40,7 @@
 //!   filled before the shaper reaches them.
 //! - [`icon`] — an SVG's filled paths into the same buffers. An icon is a glyph
 //!   with a name, drawn by the same coverage walk.
-//! - [`demo`] — the two structs of the harness shader, `core/slang/text_demo.slang`.
+//! - [`demo`] — the two structs of the harness shader, `slang/modules/text_demo.slang`.
 //!
 //! `punchcutter-fonts` is the usual way in: it finds a font, loads it through
 //! [`Font`] and [`cache`], and merges fallback faces into the same buffers. A
@@ -61,7 +61,7 @@ pub use font::Font;
 pub use icon::Icon;
 pub use layout::{Band, FILL_EVEN_ODD, Glyph, Index, Point};
 
-/// The demo shader's SPIR-V, baked by `build.rs` through `punchcutter_core::slang`.
+/// The demo shader's SPIR-V, baked by `build.rs` through `punchcutter_slang`.
 ///
 /// It exists so the harness (`examples/render.rs`) is plain wgpu and so a
 /// `cargo build` fails on a Slang error rather than an example run. The entry

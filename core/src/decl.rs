@@ -14,7 +14,7 @@
 //! # Who declares through it
 //!
 //! The OpenType arena's header in `shape/src/abi.rs` is declared this way and
-//! rendered to `core/slang/shape_abi.slang` by `cargo run -p punchcutter-shape --bin
+//! rendered to `slang/modules/shape_abi.slang` by `cargo run -p punchcutter-shape --bin
 //! gen-slang`. The mechanism lives here rather than in that crate so that a
 //! consumer can declare its own buffers the same way, without depending on the
 //! shaper.
@@ -91,7 +91,7 @@ pub struct StructDecl {
 /// A declared struct and the offsets this side gives its fields.
 ///
 /// `bound` says whether the compiled shader reaches the struct from one of its
-/// bindings. slangc reflects the types a parameter's layout needs and nothing
+/// bindings. Slang reflects the types a parameter's layout needs and nothing
 /// else, so a struct the GPU does not read through a binding has no
 /// reflected layout to compare against and the layout test says so rather than failing.
 #[derive(Clone, Copy)]

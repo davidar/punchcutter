@@ -5,7 +5,7 @@
 // `GSUB` and `GPOS` in the sfnt directory and copies them into one arena,
 // verbatim, behind a record saying where each landed. `slang/ot.slang` reads
 // OpenType's binary format out of that arena; this file is the shaper on top of
-// it. `shape/src/abi.rs` declares the arena's header, rendered into `shape_abi.slang`; shape/tests/layout.rs checks that slangc lays it out as Rust does, through `shape_demo.slang`.
+// it. `shape/src/abi.rs` declares the arena's header, rendered into `shape_abi.slang`; shape/tests/layout.rs checks that Slang lays it out as Rust does, through `shape_demo.slang`.
 //
 // The engine's rule: the CPU keeps I/O, and shaping a string is not I/O. A
 // CPU that flattened the font into bespoke tables for this file to read would
@@ -119,7 +119,7 @@
 // WHAT SLANGC DOES WITH THIS, AND WHY THE FILE IS SHAPED THE WAY IT IS
 //
 // SPIR-V's logical addressing has no way to pass a descriptor to a function, so
-// slangc **inlines every function that takes one** — which is every function
+// Slang **inlines every function that takes one** — which is every function
 // here that touches the arena. Three consequences run through the whole file
 // and are each noted where they bite:
 //
@@ -133,7 +133,7 @@
 //     and a bounds `if` in it would be three thousand basic blocks.
 //
 // The result is under 2 MB of SPIR-V for one entry point that shapes, and
-// about two seconds of slangc. Both are large, both are measured, and neither
+// about two seconds of Slang. Both are large, both are measured, and neither
 // is an accident.
 //
 // ---------------------------------------------------------------------------
@@ -204,7 +204,7 @@ public struct ShapeTables
     /// that arrives at run time in another, say. Under SPIR-V's logical
     /// addressing a resource handle may not be a conditionally written local,
     /// so a host that wants one of three has to *branch around the call* — and
-    /// slangc, which must inline every function taking a descriptor, then
+    /// Slang, which must inline every function taking a descriptor, then
     /// emits the whole shaper once per branch: three branches are three times
     /// the SPIR-V and the compile time of one.
     ///
@@ -362,7 +362,7 @@ static bool fr_pushed;
 /// The passes one segment runs: GSUB stage 0 (`rvrn`), GSUB stage 1, GPOS.
 ///
 /// A `static` rather than a literal 3 **on purpose**: with a constant trip
-/// count slangc unrolls the loop in `shapeSegment` and inlines the whole
+/// count Slang unrolls the loop in `shapeSegment` and inlines the whole
 /// subtable dispatch — every walker in this file — once per pass. This is the
 /// same economy `applySubtables`' one call site buys, spelled a second way.
 static uint g_passes = 3u;
@@ -1874,7 +1874,7 @@ void pushFrame(uint records, uint record_count, uint count, uint match_end)
 /// so it is walked as a set of exactly one rule at `sub + 2`, with the first
 /// glyph's coverage left in the input array rather than taken out of it.
 ///
-/// Written as one body on purpose: slangc inlines every function that takes a
+/// Written as one body on purpose: Slang inlines every function that takes a
 /// descriptor, so a second copy of this block is a second copy of `matchInput`,
 /// `matchLookahead`, `matchBacktrack` and both iterators.
 bool applyContext(OtArena a, OtFace face, uint sub)

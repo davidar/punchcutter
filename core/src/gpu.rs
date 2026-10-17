@@ -85,10 +85,10 @@ pub fn open_device(
 
 /// Create one compute pipeline from a passthrough SPIR-V module.
 ///
-/// The caller is trusted to have produced `spv` from the caller's own Slang sources
-/// — a build script's slangc output, or a runtime compile that
-/// [`crate::slang`] has run `spirv-val` over — with bindings written against
-/// `layout`. The passthrough path performs no validation of its own, so this
+/// The caller is trusted to have produced `spv` from the caller's own Slang
+/// sources — a build script's output, or a runtime compile that
+/// `punchcutter-slang` has run `spirv-val` over — with bindings written
+/// against `layout`. The passthrough path performs no validation of its own, so this
 /// must be called inside a validation error scope: a module wgpu *can* reject
 /// then surfaces as an `Err` rather than reaching the device's
 /// uncaptured-error handler, which panics.
@@ -100,7 +100,7 @@ pub fn passthrough_pipeline(
     spv: &[u8],
     workgroup: (u32, u32, u32),
 ) -> wgpu::ComputePipeline {
-    // SAFETY: as documented above — the module is the caller's own slangc output,
+    // SAFETY: as documented above — the module is the caller's own compiler output,
     // and wgpu-hal numbers the Vulkan bindings by position in `layout`'s bind
     // group, which is exactly what the `[[vk::binding(n)]]` literals in the
     // Slang sources are written against.

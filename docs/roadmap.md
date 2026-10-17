@@ -69,7 +69,7 @@ first.
 
 The shaper's SPIR-V requires `VK_KHR_shader_clock` for its wall-clock
 deadline, so a device without the extension cannot load the module at all.
-The fallback is a slangc define that compiles the clock read out, leaving the
+The fallback is a Slang define that compiles the clock read out, leaving the
 operation budget as the only bound.
 
 ## Conformance

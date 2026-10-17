@@ -1,7 +1,8 @@
 [workspace]
-# The engine's four crates: the curves, the shaping arena, the Slang and wgpu
-# machinery both are built on, and finding and merging fonts.
-members = ["core", "fonts", "shape", "text"]
+# The engine's five crates: the curves, the shaping arena, the byte views and
+# wgpu helpers both are built on, the Slang modules with their compiler, and
+# finding and merging fonts.
+members = ["core", "fonts", "shape", "slang", "text"]
 # The edition-2024 default, stated because it matters here: `text` depends on
 # `punchcutter-core` without features from its build script and with `gpu` from
 # its tests and examples, and only resolver 2 or later keeps a build script's
@@ -11,7 +12,8 @@ resolver = "3"
 # Every member inherits these, so the licence, the edition and the oldest
 # toolchain that builds the tree are stated once. The rust-version is the
 # language's: `if let … && let …` chains, which 1.88 stabilised for edition
-# 2024, are used throughout. No dependency asks for more (wgpu wants 1.87).
+# 2024, are used throughout. No dependency asks for more (wgpu wants 1.87,
+# shader-slang 1.88).
 [workspace.package]
 edition = "2024"
 license = "MIT"

@@ -13,8 +13,8 @@
 //!   buffer, verbatim, behind a record saying where each landed. That is a
 //!   table directory and nothing else: no lookup, no coverage table, no
 //!   subtable format is read on this side.
-//! * **`core/slang/shape.slang` shapes** — walking OpenType's own binary format
-//!   where it lies (`core/slang/ot.slang` is the reader), with the glyph
+//! * **`slang/modules/shape.slang` shapes** — walking OpenType's own binary format
+//!   where it lies (`slang/modules/ot.slang` is the reader), with the glyph
 //!   iteration, feature selection, GSUB 1–8 and GPOS 1–9 that a default-shaper
 //!   run needs. One thread per string.
 //!
@@ -37,7 +37,7 @@
 //!
 //! Glyph ids and positions, in the merged glyph index: the shaper's output is
 //! that and nothing else, and it is the whole interface. `punchcutter-text` turns a
-//! gid into curves and `core/slang/text.slang` draws them. Nothing here knows
+//! gid into curves and `slang/modules/text.slang` draws them. Nothing here knows
 //! what a glyph looks like, and nothing here draws.
 //!
 //! # Using it
@@ -52,7 +52,7 @@
 //! batch.push("Close", 16.0);
 //! let params = batch.params(&arena);
 //! // Upload `params`, `batch.requests()`, `batch.utf8_words()` and
-//! // `arena.bytes()` (`core/slang/shape_demo.slang` binds the four in order);
+//! // `arena.bytes()` (`slang/modules/shape_demo.slang` binds the four in order);
 //! // dispatch `batch.workgroups()` groups of `shape_batch`.
 //! # Ok(()) }
 //! ```
@@ -75,10 +75,10 @@ pub use batch::{Batch, Feature};
 pub use font::{Arena, FaceInfo, FontError};
 
 /// The Slang modules this crate's arena is written for, as the file names
-/// [`punchcutter_core::modules`] writes them under (`slang_dir().join(SLANG_SHAPE)`).
-/// A shader imports the second, which imports the first.
+/// `punchcutter_slang::modules` holds them under. A shader imports the
+/// second, which imports the first.
 pub const SLANG_OT: &str = "ot.slang";
 pub const SLANG_SHAPE: &str = "shape.slang";
 
-/// The entry point in `core/slang/shape_demo.slang` that the harness dispatches.
+/// The entry point in `slang/modules/shape_demo.slang` that the harness dispatches.
 pub const DEMO_ENTRY: &str = "shape_batch";

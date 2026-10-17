@@ -2,8 +2,8 @@
 
 This is the byte-level contract between the CPU side of the engine (the
 `punchcutter-text`, `punchcutter-shape` and `punchcutter-fonts` crates) and
-the three Slang modules a consumer's shader imports (`core/slang/text.slang`,
-`core/slang/shape.slang`, and `core/slang/ot.slang` beneath it). The CPU fills buffers;
+the three Slang modules a consumer's shader imports (`slang/modules/text.slang`,
+`slang/modules/shape.slang`, and `slang/modules/ot.slang` beneath it). The CPU fills buffers;
 the consumer uploads them as they are; the modules read them. Nothing on the
 CPU side interprets a font table, and nothing on the GPU side trusts one.
 
@@ -21,14 +21,14 @@ There are three groups:
 
 The Rust declarations are the source of truth: `text/src/layout.rs` for the
 curve buffers and `shape/src/abi.rs` for the rest. Both are pinned against
-slangc's own reflection by `text/tests/layout.rs` and `shape/tests/layout.rs`.
+Slang's own reflection by `text/tests/layout.rs` and `shape/tests/layout.rs`.
 
 ## Layout rules
 
 std430. A struct that carries a vector is 16-byte aligned. Every scalar field
 is a `uint`, an `int` or a `float`, so every bit pattern is valid and the plain
 byte views in `punchcutter_core::plain` are sound. **No 3-vectors**: std430
-aligns one to 16 bytes and slangc's reflection has been seen to put one at the
+aligns one to 16 bytes and Slang's reflection has been seen to put one at the
 wrong offset, so a reserved tail is a run of scalar words named `_rsvdN`,
 written as zero and read by neither side. Little-endian throughout, except the
 OpenType bytes inside the arena, which are big-endian because the format is.
@@ -281,9 +281,9 @@ measures what that costs.
 Every struct and constant above is written once, in Rust, through the
 `abi_struct!` and `abi_consts!` macros in `punchcutter_core::decl`. Each emits
 the Rust item and a table describing it; `cargo run -p punchcutter-shape --bin
-gen-slang` renders the tables into `core/slang/shape_abi.slang`, which is checked
-in because slangc resolves an import from the importing file's directory. A
+gen-slang` renders the tables into `slang/modules/shape_abi.slang`, which is checked
+in because Slang resolves an import from the importing file's directory. A
 unit test fails when the file on disk differs from the rendering, and the
-layout test compares every bound struct's offsets with slangc's reflection.
+layout test compares every bound struct's offsets with Slang's reflection.
 Never edit `shape_abi.slang` by hand. The curve buffers are mirrored by hand
 in `text.slang` and pinned by the same kind of reflection test.

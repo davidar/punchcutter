@@ -1,4 +1,4 @@
-//! The harness shader's own two structs, mirroring `core/slang/text_demo.slang`.
+//! The harness shader's own two structs, mirroring `slang/modules/text_demo.slang`.
 //!
 //! They are not part of the curve buffers — a consumer does not bind them — but
 //! the harness uploads them, so they are pinned by `tests/layout.rs` alongside the

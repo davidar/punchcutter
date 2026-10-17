@@ -1,15 +1,15 @@
-//! slangc's own per-field byte offsets for the shaping ABI, against
+//! Slang's own per-field byte offsets for the shaping ABI, against
 //! `offset_of!` on this side — the same check `text/tests/layout.rs` makes on
 //! the curve buffers.
 //!
-//! The slangc invocation is `punchcutter_core::slang`'s, not a copy of it: the same
-//! flags in the same order a host would compile the module with.
+//! The compile is `punchcutter_slang`'s, not a copy of it: the same settings
+//! a host compiles the module with.
 //!
 //! A hand-kept Slang half would need a written-out list of every field and its
 //! offset here — the drift check a generator exists to make unnecessary.
-//! `core/slang/shape_abi.slang` is generated
+//! `slang/modules/shape_abi.slang` is generated
 //! (`shape/src/abi.rs`, `the_checked_in_slang_is_the_rendering`), so what is
-//! left here is the one thing a generator cannot promise: that **slangc lays
+//! left here is the one thing a generator cannot promise: that **Slang lays
 //! the rendered struct out the way Rust laid the declared one out**. The list
 //! is walked out of the same table the renderer used, so adding a field to the
 //! declaration adds it here.
@@ -19,43 +19,25 @@
 
 use std::path::{Path, PathBuf};
 
-use punchcutter_core::slang::{self, SlangError};
+use punchcutter_slang::Options;
 
 fn slang_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../core/slang")
-}
-
-/// Whether a failure means "slangc is not installed", in which case the test
-/// skips rather than fails — the posture `punchcutter_core::slang` takes for
-/// `spirv-val`, and what lets a checkout without the Slang toolchain still
-/// `cargo test` green.
-fn is_missing_toolchain(err: &SlangError) -> Option<String> {
-    match err {
-        SlangError::Spawn { program, source } => Some(format!("{program}: {source}")),
-        _ => None,
-    }
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../slang/modules")
 }
 
 #[test]
 fn the_slang_layout_matches_this_one() {
     let source = slang_dir().join("shape_demo.slang");
-    let json = match slang::reflect(&source, punchcutter_shape::DEMO_ENTRY, &[], &[]) {
-        Ok(json) => json,
-        Err(err) => match is_missing_toolchain(&err) {
-            Some(why) => {
-                eprintln!("skipping the Slang layout check: slangc is not runnable ({why})");
-                return;
-            }
-            None => panic!("reflection failed:\n{err}"),
-        },
-    };
-    let reflected = slang::struct_offsets(&json);
+    let reflected =
+        punchcutter_slang::reflect(&source, punchcutter_shape::DEMO_ENTRY, &Options::default())
+            .unwrap_or_else(|err| panic!("reflection failed:\n{err}"))
+            .structs;
 
     let mut checked = 0usize;
     for entry in punchcutter_shape::abi::structs() {
         let name = entry.decl.name;
         if !entry.bound {
-            // slangc reflects the types a binding's layout needs and nothing
+            // Slang reflects the types a binding's layout needs and nothing
             // else, and the arena is bound as a word buffer — so `OtHeader` and
             // `OtFace` have no reflected layout to compare against. `ot.slang`
             // reads them word by word, which is what pins their order.
@@ -66,7 +48,7 @@ fn the_slang_layout_matches_this_one() {
             continue;
         }
         let Some(slang_side) = reflected.get(name) else {
-            panic!("slangc did not reflect `{name}`; reflected: {reflected:?}");
+            panic!("Slang did not reflect `{name}`; reflected: {reflected:?}");
         };
         for (field, offset) in (entry.offsets)() {
             assert_eq!(

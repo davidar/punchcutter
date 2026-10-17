@@ -1,0 +1,21 @@
+[package]
+name = "punchcutter-slang"
+version = "0.1.0"
+edition.workspace = true
+description = "The engine's Slang modules, and the compiler that builds a shader against them in process: SPIR-V, reflection, the hashed-string table"
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# The Slang compiler itself, opened in process. The crate carries the pinned
+# official Slang release inside the binary (downloaded and checked against its
+# SHA-256 when the crate builds), so a program built on this crate compiles
+# shaders on a machine with nothing installed and no variable set.
+shader-slang = { git = "https://github.com/davidar/slang-rs", rev = "3b3d2da01ea1aa2950dfca6c08a65b108b111750" }
+# A `Reflection` as bytes, so a build script can bake it beside the SPIR-V
+# and a process starting on baked modules has its bindings and its strings
+# without compiling.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# A compile's warnings, when the caller does not take them itself.
+tracing = "0.1"

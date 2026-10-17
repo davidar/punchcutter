@@ -31,21 +31,20 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
 use punchcutter_core::plain::{bytes_of, bytes_of_slice};
-use punchcutter_core::slang;
 use punchcutter_shape::{
     Arena, Batch, SHAPE_ABI_VERSION, SHAPE_RUN_DEADLINE, SHAPE_RUN_NOTDEF, SHAPE_RUN_OUT_OF_OPS,
     SHAPE_RUN_UNSUPPORTED, ShapeFont, ShapeParams, ShapeRun, ShapedGlyph,
 };
+use punchcutter_slang::Options;
 
 const FONT: &str = "/usr/share/fonts/adwaita-sans-fonts/AdwaitaSans-Regular.ttf";
 
 fn main() -> Result<()> {
-    // **Before the device**, and before slangc: writing the mismatch arena is
+    // **Before the device**, and before the compiler: writing the mismatch arena is
     // reading a font and sorting pairs, and a test that asks for it (a
     // consumer's own malformed-arena check) wants the bytes and not a
-    // dispatch. Asked after `Gpu::new`, it would need slangc and the Slang
-    // modules on a machine with no checkout, and fail with a message that says
-    // nothing about fonts.
+    // dispatch. Asked after `Gpu::new`, it would need a GPU, and fail with a
+    // message that says nothing about fonts.
     if let Some(path) = dump_path() {
         let data = std::fs::read(FONT).with_context(|| format!("reading {FONT}"))?;
         let bytes = old_cmap_array(&data)?;
@@ -458,12 +457,16 @@ impl Gpu {
         let source = std::env::var_os("PUNCHCUTTER_SLANG_DIR")
             .map(PathBuf::from)
             .filter(|dir| dir.is_dir())
-            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../core/slang"))
+            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../slang/modules"))
             .join("shape_demo.slang");
-        let spirv = slang::compile(&source, punchcutter_shape::DEMO_ENTRY, &[], &[])
-            .map_err(|err| anyhow::anyhow!("{err}"))?;
-        let probe_spirv = slang::compile(&source, "clock_probe", &[], &[])
-            .map_err(|err| anyhow::anyhow!("{err}"))?;
+        let mut program = punchcutter_slang::compile_program(
+            &source,
+            &[punchcutter_shape::DEMO_ENTRY, "clock_probe"],
+            &Options::default(),
+        )
+        .map_err(|err| anyhow::anyhow!("{err}"))?;
+        let probe_spirv = program.entries.remove(1).spirv;
+        let spirv = program.entries.remove(0).spirv;
         let layout = create_layout(&device);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("punchcutter-shape-pl"),

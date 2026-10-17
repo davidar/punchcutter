@@ -1,43 +1,38 @@
-//! Bakes `core/slang/text_demo.slang` — and with it `core/slang/text.slang`, which
-//! it imports — into SPIR-V for the harness.
+//! Bakes `slang/modules/text_demo.slang` — and with it `slang/modules/text.slang`,
+//! which it imports — into SPIR-V for the harness.
 //!
-//! The driver is `punchcutter_core::slang`. One entry point, one module, no
-//! variants: nothing here writes a swapchain image.
+//! The compiler is `punchcutter_slang`, in process, the way a consumer's build
+//! script would use it. One entry point, one module, no variants: nothing
+//! here writes a swapchain image.
 //!
 //! Baking it at build time rather than in the example means a Slang mistake is a
 //! build failure, which is the cheaper place to find one.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use punchcutter_core::slang;
+use punchcutter_slang::Options;
 
 const ENTRY: &str = "text_demo";
 
 fn main() {
-    let modules = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../core/slang");
-    let source = modules.join("text_demo.slang");
-    let module = modules.join("text.slang");
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../slang/modules/text_demo.slang");
 
-    // The two files, not the directory: an edit to the shaper's modules must
-    // not rebuild this crate.
+    // The demo's own file: `text.slang` travels inside `punchcutter-slang`,
+    // so an edit to it rebuilds that crate and this script with it.
     println!("cargo:rerun-if-changed={}", source.display());
-    println!("cargo:rerun-if-changed={}", module.display());
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-env-changed=SLANGC");
 
     let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"));
-    let slangc = slang::slangc_program();
-    let includes: [&Path; 1] = [&modules];
 
-    let compiled = slang::compile_capturing(&slangc, &source, ENTRY, &[], &[], &includes)
+    let mut program = punchcutter_slang::compile_program(&source, &[ENTRY], &Options::default())
         .unwrap_or_else(|err| panic!("{err}"));
-    // Nothing subscribes to `tracing` in a build script, so slangc's
+    // Nothing subscribes to `tracing` in a build script, so Slang's
     // success-path warnings are surfaced by hand. The gate is zero of them.
-    for line in compiled.warnings.lines() {
-        println!("cargo:warning=slangc: {line}");
+    for line in program.warnings.lines() {
+        println!("cargo:warning=slang: {line}");
     }
 
     let output = out_dir.join(format!("{ENTRY}.spv"));
-    std::fs::write(&output, &compiled.spirv)
+    std::fs::write(&output, &program.entries.remove(0).spirv)
         .unwrap_or_else(|err| panic!("could not write {}: {err}", output.display()));
 }

@@ -1,10 +1,10 @@
-//! The four buffers, as `#[repr(C)]` types `core/slang/text.slang` mirrors.
+//! The four buffers, as `#[repr(C)]` types `slang/modules/text.slang` mirrors.
 //!
 //! Layout rules are the engine's (docs/arena.md, *Layout rules*): std430,
 //! every struct 16-byte aligned where it carries a vector, every reserved tail
 //! a run of scalar words rather than a `uint3` — std430 aligns a 3-vector to
-//! 16 B and slangc's reflection puts one at the wrong offset. `tests/layout.rs` compares
-//! slangc's own per-field byte offsets against `offset_of!` here.
+//! 16 B and Slang's reflection puts one at the wrong offset. `tests/layout.rs` compares
+//! Slang's own per-field byte offsets against `offset_of!` here.
 //!
 //! # What the reference's textures became
 //!
@@ -117,7 +117,7 @@ pub struct Index {
 // SAFETY for all four: `#[repr(C)]` aggregates of `f32`/`u32` with no padding
 // beyond what the explicit `_rsvd*` words and `align(16)` account for, which is
 // exactly what `Plain` asks for. `tests/layout.rs` pins every offset against
-// slangc's reflection of the Slang mirror.
+// Slang's reflection of the Slang mirror.
 unsafe impl punchcutter_core::plain::Plain for Point {}
 unsafe impl punchcutter_core::plain::Plain for CurveRef {}
 unsafe impl punchcutter_core::plain::Plain for Band {}

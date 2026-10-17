@@ -17,7 +17,7 @@
 /// its layout, and have no invalid bit patterns (so: only `u32`/`f32`/`i32`
 /// leaves and arrays thereof — no `bool`, no enums, no references). The layout tests (`text/tests/layout.rs`, `shape/tests/layout.rs`) pin the
 /// "no padding" half of that claim by asserting each field offset and each
-/// struct size against slangc's own reflection.
+/// struct size against Slang's own reflection.
 pub unsafe trait Plain: Copy + Sized {}
 
 /// Borrow a value as the bytes an upload would send.

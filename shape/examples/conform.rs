@@ -57,12 +57,12 @@ use std::time::Instant;
 use anyhow::{Context, Result, bail};
 use harfrust::{FontRef, ShapeOptions, ShaperData, UnicodeBuffer};
 use punchcutter_core::plain::{bytes_of, bytes_of_slice};
-use punchcutter_core::slang;
 use punchcutter_shape::{
     Arena, Batch, Feature, MAX_SHAPE_FEATURES, SHAPE_GLYPH_MARK, SHAPE_RUN_BAD_UTF8,
     SHAPE_RUN_OUT_OF_OPS, SHAPE_RUN_TRUNCATED, SHAPE_RUN_UNSUPPORTED, ShapeParams, ShapeRun,
     ShapedGlyph,
 };
+use punchcutter_slang::Options;
 
 /// What `fc-match sans-serif` answers on a stock Fedora desktop. The three are
 /// checked where they are installed, and the system's sans-serif when none is.
@@ -1104,7 +1104,7 @@ fn harfbuzz_corpus(gpu: &Gpu) -> Result<usize> {
                 }
                 // A font with no GPOS gets HarfBuzz's own fallback mark
                 // positioning, which shifts a mark back over the base it
-                // follows. The shader has none (`core/slang/shape.slang` says so in its header);
+                // follows. The shader has none (`slang/modules/shape.slang` says so in its header);
                 // the ids and clusters still have to agree exactly, and the
                 // mark is GDEF's rather than Unicode's — which is what the
                 // aots cases need, their "marks" being control codepoints.
@@ -1398,11 +1398,12 @@ impl Gpu {
         let source = std::env::var_os("PUNCHCUTTER_SLANG_DIR")
             .map(PathBuf::from)
             .filter(|dir| dir.is_dir())
-            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../core/slang"))
+            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../slang/modules"))
             .join("shape_demo.slang");
         let started = Instant::now();
-        let spirv = slang::compile(&source, punchcutter_shape::DEMO_ENTRY, &[], &[])
-            .map_err(|err| anyhow::anyhow!("{err}"))?;
+        let spirv =
+            punchcutter_slang::compile(&source, punchcutter_shape::DEMO_ENTRY, &Options::default())
+                .map_err(|err| anyhow::anyhow!("{err}"))?;
         println!(
             "shader: {} KiB of SPIR-V in {:.0} ms",
             spirv.len().div_ceil(1024),

@@ -1,28 +1,18 @@
-//! slangc's own per-field byte offsets against `offset_of!` on this side, so the
+//! Slang's own per-field byte offsets against `offset_of!` on this side, so the
 //! Rust and Slang halves of the curve buffers cannot drift apart silently.
 //!
-//! `shape/tests/layout.rs` makes the same check on the arena, down to the
-//! courtesy it extends a machine with no slangc: a toolchain that will not
-//! spawn skips the check rather than failing the suite. Everything else — a
-//! renamed field, a reordered one, a `uint3` where three `uint`s were meant —
+//! `shape/tests/layout.rs` makes the same check on the arena. A renamed
+//! field, a reordered one, a `uint3` where three `uint`s were meant: each
 //! fails here, in a second, instead of as wrong pixels three layers down.
 
 use std::path::PathBuf;
 
-use punchcutter_core::slang::{self, SlangError};
+use punchcutter_slang::Options;
 use punchcutter_text::demo;
 use punchcutter_text::layout;
 
 fn demo_slang() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../core/slang/text_demo.slang")
-}
-
-/// No slangc, no check, still green.
-fn is_missing_toolchain(err: &SlangError) -> Option<String> {
-    match err {
-        SlangError::Spawn { program, source } => Some(format!("{program}: {source}")),
-        _ => None,
-    }
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../slang/modules/text_demo.slang")
 }
 
 #[test]
@@ -31,20 +21,11 @@ fn the_slang_layout_matches_this_one() {
     use std::collections::BTreeMap;
 
     // Reflecting the demo entry point reflects `text.slang`'s whole parameter
-    // block too: slangc lays out every struct reachable from the module, not
+    // block too: Slang lays out every struct reachable from the module, not
     // only what one entry point happens to read.
-    let json = match slang::reflect(&demo_slang(), "text_demo", &[], &[]) {
-        Ok(json) => json,
-        Err(err) => match is_missing_toolchain(&err) {
-            Some(why) => {
-                eprintln!("skipping the Slang layout check: slangc is not runnable ({why})");
-                return;
-            }
-            None => panic!("reflection failed:\n{err}"),
-        },
-    };
-
-    let reflected = slang::struct_offsets(&json);
+    let reflected = punchcutter_slang::reflect(&demo_slang(), "text_demo", &Options::default())
+        .unwrap_or_else(|err| panic!("reflection failed:\n{err}"))
+        .structs;
 
     // Field name on the Slang side, byte offset on this one. Both halves use the same identifiers throughout, so each Slang field is looked up by its Rust name.
     let expected: Vec<(&str, Vec<(&str, usize)>)> = vec![
@@ -99,7 +80,7 @@ fn the_slang_layout_matches_this_one() {
     for (name, fields) in expected {
         let got = reflected
             .get(name)
-            .unwrap_or_else(|| panic!("slangc reflected no struct named {name}"));
+            .unwrap_or_else(|| panic!("Slang reflected no struct named {name}"));
         let want: BTreeMap<String, usize> = fields
             .into_iter()
             .map(|(field, offset)| (field.to_string(), offset))
@@ -108,7 +89,7 @@ fn the_slang_layout_matches_this_one() {
     }
 }
 
-/// Sizes as well as offsets: a tail of reserved words that slangc pads past is a
+/// Sizes as well as offsets: a tail of reserved words that Slang pads past is a
 /// buffer whose stride is wrong, and a stride is not a field offset.
 #[test]
 fn the_strides_are_what_the_buffers_assume() {

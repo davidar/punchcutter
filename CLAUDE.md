@@ -3,7 +3,8 @@
 A GPU text engine: OpenType shaping and Slug glyph coverage in Slang compute
 shaders, with a CPU side that only parses fonts into bytes and finds them
 through fontconfig. README.md has the overview, the build and the two
-harnesses.
+harnesses. The modules live in `slang/modules/`, inside the `punchcutter-slang`
+crate that compiles them in process.
 
 **References** (living, in `docs/`): arena.md the byte-level contract between
 the crates and the Slang modules; roadmap.md what is not built yet.
@@ -21,7 +22,7 @@ pointer.
 - **GPU first.** The CPU keeps I/O; shaping, coverage and every table walk are
   the shaders'. No CPU shaper, not even a reference one (harfrust is the
   oracle, in an example).
-- **Slang, not WGSL**, for every shader. `core/slang/shape_abi.slang` is generated
+- **Slang, not WGSL**, for every shader. `slang/modules/shape_abi.slang` is generated
   (`cargo run -p punchcutter-shape --bin gen-slang`); never edit it by hand.
 - **The GPU on this machine**: the harnesses pick an integrated or software
   adapter and refuse a discrete NVIDIA one; keep it that way.
@@ -44,7 +45,9 @@ pointer.
 - The host is an immutable image without the unversioned `.so` symlinks the
   linker wants. `cargo check` is fine; `cargo build`, `cargo test` and
   `cargo run` need `LIBRARY_PATH=/var/home/linuxbrew/.linuxbrew/lib`.
-- slangc is on `PATH`; `spirv-val` is used when present.
+- Slang needs no install: `punchcutter-slang` carries it (the `shader-slang`
+  fork downloads the pinned release once, into `~/.cache/shader-slang`).
+  `spirv-val` is used when present.
 
 ## Git
 

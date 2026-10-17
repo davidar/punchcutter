@@ -1,4 +1,4 @@
-//! The shaping ABI: the arena the CPU fills and `core/slang/shape.slang` walks,
+//! The shaping ABI: the arena the CPU fills and `slang/modules/shape.slang` walks,
 //! as `#[repr(C)]` types. docs/arena.md is the same contract as prose.
 //!
 //! The layout rules are the engine's (docs/arena.md, *Layout rules*): std430,
@@ -7,7 +7,7 @@
 //! **Declared once**: every struct and constant below
 //! is written through [`abi_struct!`](punchcutter_core::abi_struct) and
 //! [`abi_consts!`](punchcutter_core::abi_consts), which emit the Rust item *and* a
-//! table beside it, and `core/slang/shape_abi.slang` is that table rendered by
+//! table beside it, and `slang/modules/shape_abi.slang` is that table rendered by
 //! `cargo run -p punchcutter-shape --bin gen-slang`. `ot.slang` and `shape.slang`
 //! import it. There is no hand-kept Slang half to drift; the macros live in
 //! `punchcutter-core` so that a consumer can declare its own buffers the same
@@ -17,7 +17,7 @@
 //!
 //! The alternative is to flatten bespoke tables out of a font — a `cmap`
 //! sorted by codepoint, an advance array, the PairPos subtables, the ligature
-//! list, the single-input chain rules — for `core/slang/shape.slang` to read.
+//! list, the single-input chain rules — for `slang/modules/shape.slang` to read.
 //! Every lookup type the shaper gained that way would be written twice, once
 //! as a Rust flattener that had to *understand* the lookup and once as a Slang
 //! interpreter of the flattener's output.
@@ -395,7 +395,7 @@ abi_struct! {
 unsafe impl Plain for ShapeRun {}
 
 // ---------------------------------------------------------------------------
-// The tables `core/slang/shape_abi.slang` is rendered from
+// The tables `slang/modules/shape_abi.slang` is rendered from
 // ---------------------------------------------------------------------------
 
 /// How the generated module says where it came from.
@@ -413,7 +413,7 @@ const CONST_GROUPS: &[ConstGroup] = &[VERSIONS, RUN_FLAGS, GLYPH_FLAGS, FACE_FLA
 ///
 /// The arena's two are **not**: the arena is a `StructuredBuffer<uint>` — it has
 /// to be, since the tables behind the directory are OpenType's own bytes — so
-/// slangc reflects no layout for `OtHeader` or `OtFace` and there is nothing to
+/// Slang reflects no layout for `OtHeader` or `OtFace` and there is nothing to
 /// compare. What pins their field order on the Slang side is `ot.slang`'s
 /// `otFaceAt`, which reads sixteen consecutive words by name.
 const STRUCTS: &[AbiStruct] = &[
@@ -472,7 +472,7 @@ const MODULE_DOC: &[&str] = &[
     "second format to keep in step.",
 ];
 
-/// `core/slang/shape_abi.slang`, rendered from the tables above.
+/// `slang/modules/shape_abi.slang`, rendered from the tables above.
 pub fn slang_module() -> String {
     punchcutter_core::decl::render(
         GEN_COMMAND,
@@ -487,7 +487,7 @@ pub fn slang_module() -> String {
 }
 
 /// The declared structs, for the reflection test in `shape/tests/layout.rs`:
-/// slangc's own per-field offsets against `offset_of!`, walked from the table
+/// Slang's own per-field offsets against `offset_of!`, walked from the table
 /// rather than from a hand-written list of it.
 pub fn structs() -> &'static [AbiStruct] {
     STRUCTS

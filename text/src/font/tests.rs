@@ -1,8 +1,7 @@
 use super::*;
 
 /// Every test here needs a real font, and a machine without one must still
-/// be `cargo test` green — the same courtesy the layout tests extend to a
-/// machine without slangc.
+/// be `cargo test` green.
 fn sans() -> Option<Font> {
     let path = default_sans()?;
     match Font::load(&path, 0) {

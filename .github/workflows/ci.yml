@@ -17,7 +17,9 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
-  SLANG_VERSION: "2026.14.1"
+  # Where the shader-slang build keeps the Slang release it downloads, so the
+  # cache below can hold it.
+  SHADER_SLANG_CACHE_DIR: ${{ github.workspace }}/.shader-slang-cache
 
 jobs:
   check-and-test:
@@ -29,7 +31,7 @@ jobs:
       # fontconfig and sans-serif fonts for the tests that load one (they skip
       # without one; Noto Sans lacks the arrows the font tests require,
       # DejaVu Sans has them); lavapipe for the examples; spirv-val for the
-      # compile tests.
+      # compile tests. The Slang compiler itself comes with the tree.
       - name: System packages
         run: |
           sudo apt-get update
@@ -37,22 +39,13 @@ jobs:
             fontconfig fonts-noto-core fonts-dejavu-core \
             mesa-vulkan-drivers libvulkan1 spirv-tools
 
-      - name: slangc
-        id: slang
+      # The Slang release archive the shader-slang build downloads, keyed on
+      # the pinned revision of the crate that names it.
+      - name: Slang release
         uses: actions/cache@v5
         with:
-          path: ~/slang
-          key: slang-${{ env.SLANG_VERSION }}-linux-x86_64
-      - name: slangc (download)
-        if: steps.slang.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p ~/slang
-          curl -sSfL "https://github.com/shader-slang/slang/releases/download/v${SLANG_VERSION}/slang-${SLANG_VERSION}-linux-x86_64.tar.gz" \
-            | tar -xz -C ~/slang
-      - name: slangc (on PATH)
-        run: |
-          echo "$HOME/slang/bin" >> "$GITHUB_PATH"
-          ~/slang/bin/slangc -v
+          path: .shader-slang-cache
+          key: shader-slang-${{ hashFiles('slang/Cargo.toml') }}
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -75,7 +68,7 @@ jobs:
       - name: The generated module matches its declarations
         run: |
           cargo run --locked -p punchcutter-shape --bin gen-slang
-          git diff --exit-code -- core/slang/shape_abi.slang
+          git diff --exit-code -- slang/modules/shape_abi.slang
 
       - name: The render example, on lavapipe
         run: cargo run --locked -p punchcutter-text --example render

@@ -198,7 +198,7 @@ impl Loaded {
     }
 
     /// The four curve buffers as the bytes the GPU holds, in the binding order
-    /// `core/slang/text.slang` declares: points, bands, band curves, glyphs.
+    /// `slang/modules/text.slang` declares: points, bands, band curves, glyphs.
     pub fn curve_bytes(&self) -> [&[u8]; 4] {
         let set = &self.curves;
         [
@@ -210,7 +210,7 @@ impl Loaded {
     }
 
     /// The arena as the bytes the GPU holds: `ShapeTables::ot` in
-    /// `core/slang/shape.slang`.
+    /// `slang/modules/shape.slang`.
     pub fn arena_bytes(&self) -> &[u8] {
         self.arena.bytes()
     }

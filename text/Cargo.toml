@@ -22,15 +22,15 @@ ttf-parser = "0.25.1"
 usvg = "0.48.1"
 
 [build-dependencies]
-# The demo shader is baked through the same slangc driver
-# (`punchcutter_core::slang`) a consumer's build script would use. Featureless:
-# a build script has no business pulling wgpu in.
-punchcutter-core = { path = "../core" }
+# The demo shader is baked through the same compiler a consumer's build script
+# would use: Slang, in process, with the engine's modules on its search path.
+punchcutter-slang = { path = "../slang" }
 
 [dev-dependencies]
-# The harness is headless wgpu (`gpu`), and the layout test parses slangc's
-# reflection JSON.
+# The harness is headless wgpu (`gpu`), and the layout test reflects the
+# demo shader.
 punchcutter-core = { path = "../core", features = ["gpu"] }
+punchcutter-slang = { path = "../slang" }
 png = "0.18.1"
 pollster = "0.4"
 # The comparison raster. swash rasterises the same outlines on the CPU for the

@@ -1,4 +1,4 @@
-//! A source lint over `core/slang/shape.slang` and `core/slang/ot.slang`: a rule about
+//! A source lint over `slang/modules/shape.slang` and `slang/modules/ot.slang`: a rule about
 //! the shader that no compiler checks and that a future edit would quietly
 //! break.
 
@@ -49,7 +49,6 @@ fn assigned<'a>(code: &'a str) -> Option<(&'a str, &'a str)> {
 /// arenas; this is the check that needs no GPU.
 #[test]
 fn no_loop_in_the_shaper_is_bounded_by_the_arena() {
-    let dir = punchcutter_core::slang_dir();
     // The reads that answer with a byte of the arena. `otCount` and `otTake`
     // are the sanctioned wrappers and are *not* here.
     const RAW: [&str; 4] = ["be16(", "be32(", "otByte(", "otWord("];
@@ -59,10 +58,10 @@ fn no_loop_in_the_shaper_is_bounded_by_the_arena() {
     };
 
     let mut complaints: Vec<String> = Vec::new();
-    for file in ["shape.slang", "ot.slang"] {
-        let text = std::fs::read_to_string(dir.join(file))
-            .unwrap_or_else(|err| panic!("could not read {file}: {err}"));
-
+    for (file, text) in [
+        ("shape.slang", punchcutter_slang::modules::SHAPE),
+        ("ot.slang", punchcutter_slang::modules::OT),
+    ] {
         // Taint is per function, and a function is what starts in column 0.
         let mut tainted: Vec<String> = Vec::new();
         for (number, line) in text.lines().enumerate() {
