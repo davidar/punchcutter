@@ -56,6 +56,10 @@ jobs:
       - name: Check, with warnings as errors
         run: cargo check --locked --workspace --all-targets
 
+      # The types-only build a consumer that never compiles takes.
+      - name: The compiler crate without its compiler
+        run: cargo check --locked -p punchcutter-slang --no-default-features
+
       # Every intra-doc link resolves and none points at a private item.
       - name: Docs, with warnings as errors
         run: cargo doc --locked --workspace --no-deps --all-features

@@ -40,7 +40,8 @@ installed. One link compiles every entry point of a shader and reflects the
 program: bindings, struct offsets and the `getStringHash` table, as plain
 data with a JSON form for baking beside the SPIR-V. The four Slang modules
 are compiled into the crate (`modules`) and are on every compile's search
-path.
+path. The compiler is the `compiler` feature, on by default; without it the
+crate is the types and the modules alone.
 
 **Machinery** (`punchcutter-core`). Plain-bytes upload views, the
 declare-once macros that generate `slang/modules/shape_abi.slang`, and wgpu

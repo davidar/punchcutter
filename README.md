@@ -34,7 +34,7 @@ The status bar in the caustics repository is its first consumer.
 | `punchcutter-text` | a font's outlines, or an SVG's filled paths, into quadratic curves and Slug's band tables; the curve cache file; a face's `GSUB` closure | `Font`, `icon::load`, `Builder`, `CurveSet`, `Cached`, `font::codepoint_curves`, `closure::gsub_closure` |
 | `punchcutter-shape` | the five layout tables sliced out of the font file into one arena, unread; the batch of strings for a dispatch | `Arena`, `Batch`, `Feature`, the `abi` structs and flags |
 | `punchcutter-fonts` | fontconfig, the cache directory, and the fallback chain that merges other faces into the same glyph space | `Loaded`, `Merged`, `fallback::Chain` |
-| `punchcutter-slang` | the Slang modules themselves, and the compiler that builds a shader against them in process: SPIR-V, reflection (bindings, struct offsets, the `getStringHash` table) | `compile`, `compile_program`, `reflect`, `Program`, `Reflection`, `modules` |
+| `punchcutter-slang` | the Slang modules themselves, and the compiler that builds a shader against them in process: SPIR-V, reflection (bindings, struct offsets, the `getStringHash` table); the compiler is the default `compiler` feature | `compile`, `compile_program`, `reflect`, `Program`, `Reflection`, `modules` |
 | `punchcutter-core` | plain-bytes views, the declare-once ABI macros, wgpu helpers (`gpu` feature); std-only | `plain`, `decl`, `gpu::open_device` |
 
 Nothing on the CPU reads a lookup, a coverage table or a subtable format: a
@@ -62,7 +62,9 @@ it was built against, no checkout has to be where it was, and nothing has to
 be installed. The same call serves a build script, a test and a program that
 recompiles its shader at run time, and it comes back with the program's
 reflection: every binding, every struct's field offsets, and the literal
-behind every `getStringHash`.
+behind every `getStringHash`. A program that only ever starts on modules
+its build script baked takes the crate with `default-features = false`: the
+reflection types and their JSON form, without Slang in its binary.
 
 Every face shares one merged glyph space: a fallback face reserves its whole
 glyph range, so its own tables index the merged ids by one addition and it

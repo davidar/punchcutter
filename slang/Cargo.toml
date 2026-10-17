@@ -11,11 +11,18 @@ rust-version.workspace = true
 # official Slang release inside the binary (downloaded and checked against its
 # SHA-256 when the crate builds), so a program built on this crate compiles
 # shaders on a machine with nothing installed and no variable set.
-shader-slang = { git = "https://github.com/davidar/slang-rs", rev = "3b3d2da01ea1aa2950dfca6c08a65b108b111750" }
+shader-slang = { git = "https://github.com/davidar/slang-rs", rev = "3b3d2da01ea1aa2950dfca6c08a65b108b111750", optional = true }
 # A `Reflection` as bytes, so a build script can bake it beside the SPIR-V
 # and a process starting on baked modules has its bindings and its strings
 # without compiling.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # A compile's warnings, when the caller does not take them itself.
-tracing = "0.1"
+tracing = { version = "0.1", optional = true }
+
+[features]
+default = ["compiler"]
+# Slang in process: `compile`, `compile_program`, `reflect`, `version`. Off,
+# the crate is the reflection types, their JSON form and the modules, for a
+# program that starts on baked modules and never compiles.
+compiler = ["dep:shader-slang", "dep:tracing"]
