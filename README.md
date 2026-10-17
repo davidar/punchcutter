@@ -1,5 +1,7 @@
 # punchcutter
 
+https://github.com/user-attachments/assets/496f2b47-ef36-44e0-9432-cca2ab3cab32
+
 A GPU text engine. It shapes text (OpenType `GSUB` and `GPOS`, HarfBuzz's
 default shaper) and renders glyphs (per-pixel coverage straight from the
 font's own quadratic curves, by the Slug algorithm), both in Slang compute
