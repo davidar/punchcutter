@@ -122,6 +122,24 @@ struct ReelScene
     uint hero_glyph;
 };
 
+/// Blocks one frame can show at most; past this, the rest are not drawn.
+static const uint MAX_VISIBLE = 64u;
+
+/// `ReelView.list`: the block is placed in pixels, not in the world.
+static const uint VISIBLE_SCREEN = 0x80000000u;
+
+/// The frame's camera and the blocks on screen, worked out once a frame by
+/// `reel_view` so that no pixel does it again.
+struct ReelView
+{
+    float4 camera; // xy centre, z zoom
+    uint count;
+    uint _rsvd0;
+    uint _rsvd1;
+    uint _rsvd2;
+    uint4 list[MAX_VISIBLE / 4u]; // block indices, VISIBLE_SCREEN set for a screen block
+};
+
 /// The frame's clock and camera: the only things the CPU decides per frame.
 /// Mirrors `Frame`.
 struct ReelFrame
@@ -138,7 +156,7 @@ struct ReelFrame
     uint4 out; // x pixels per row of `image`; y nonzero to write blue first; z samples, 1 or 4
     uint4 partial; // x strings in `run_list`, or EVERY; y blocks in `block_list`, or EVERY
     uint4 run_list[4]; // the strings to shape again this frame
-    uint4 block_list[4]; // the blocks to set again this frame
+    uint4 block_list[8]; // the blocks to set again this frame
 };
 
 /// `ReelFrame.partial`: shape, or set, all of them.
@@ -158,6 +176,7 @@ static const uint EVERY = 0xFFFFFFFFu;
 [[vk::binding(11, 0)]] RWStructuredBuffer<ReelBlockOut> block_out;
 [[vk::binding(12, 0)]] RWStructuredBuffer<ReelScene> scene;
 [[vk::binding(13, 0)]] RWStructuredBuffer<uint> image;
+[[vk::binding(14, 0)]] RWStructuredBuffer<ReelView> view;
 
 // ---------------------------------------------------------------------------
 // Shape
@@ -577,26 +596,27 @@ uint firstRightOf(ReelLine line, float x)
 float3 shadeSample(float3 colour, float2 p, float2 ps, float2 pxPerUnit, float footprint, float t, bool screenPass)
 {
     ReelScene sc = scene[0];
-    for (uint bi = 0u; bi < frame.counts.x; ++bi)
+    uint visible = view[0].count;
+    for (uint k = 0u; k < visible; ++k)
     {
-        ReelBlock b = blocks[bi];
-        if (b.opacity <= 0.0)
-        {
-            continue;
-        }
-        bool screen = (b.flags & BLOCK_SCREEN) != 0u;
+        uint entry = view[0].list[k >> 2u][k & 3u];
+        bool screen = (entry & VISIBLE_SCREEN) != 0u;
         if (screen != screenPass)
         {
             continue;
         }
+        uint bi = entry & ~VISIBLE_SCREEN;
         float2 q = screen ? ps : p;
-        float2 unitPx = screen ? float2(1.0, 1.0) : pxPerUnit;
-        ReelBlockOut o = block_out[bi];
-        float pad = b.size * 0.5;
-        if (q.x < o.rect.x - pad || q.x > o.rect.z + pad || q.y < o.rect.y - pad || q.y > o.rect.w + pad)
+        // The box first, and the block's record only for a sample inside it.
+        float4 rect = block_out[bi].rect;
+        float pad = blocks[bi].size * 0.5;
+        if (q.x < rect.x - pad || q.x > rect.z + pad || q.y < rect.y - pad || q.y > rect.w + pad)
         {
             continue;
         }
+        ReelBlock b = blocks[bi];
+        ReelBlockOut o = block_out[bi];
+        float2 unitPx = screen ? float2(1.0, 1.0) : pxPerUnit;
         if ((b.flags & BLOCK_WAVE) != 0u && frame.look.y != 0.0)
         {
             float u = (q.x - b.origin.x) / b.size;
@@ -764,6 +784,69 @@ float2 crossings(float v0, float v1, float v2, float level)
     return t;
 }
 
+/// One curve of the hero glyph, as the overlay draws it at em-space point
+/// `e`: its part drawn so far, its hull and points, and where the probe's
+/// rays cross it. `reach` is how far from the curve's control box any of
+/// that can be seen.
+void overlayCurve(uint ci, float2 e, float pe, float reach, float2 probe, bool nearRayH,
+                  bool nearRayV, float span, uint curveMin, inout float line, inout float hull,
+                  inout float dots, inout float rings, inout float ringSign)
+{
+    float curves = frame.hero.x;
+    float probeOn = frame.hero.w;
+    // A band names curves only, never a contour's tail entry.
+    TextPoint here = textPoints[ci];
+    float2 a = here.p;
+    float2 c = here.c;
+    float2 z = textPoints[ci + 1u].p;
+    float drawn = saturate(frame.hero.y * span - float(ci - curveMin));
+    float2 lo = min(min(a, c), z) - reach;
+    float2 hi = max(max(a, c), z) + reach;
+    bool nearCurve = all(e >= lo) && all(e <= hi);
+    if (drawn > 0.0 && curves > 0.0 && nearCurve)
+    {
+        // The part drawn so far, by de Casteljau: the same curve cut at
+        // `drawn`.
+        float2 c1 = lerp(a, c, drawn);
+        float2 z1 = bezier(a, c, z, drawn);
+        line = max(line, stroke(quadratic(e, a, c1, z1), 2.2 * pe, pe));
+        float settled = saturate(drawn * 4.0 - 3.0);
+        hull = max(hull, settled * stroke(min(segment(e, a, c), segment(e, c, z)), 1.0 * pe, pe));
+        dots = max(dots, settled * stroke(length(e - a), 7.0 * pe, pe));
+        float2 sq = abs(e - c);
+        float box = abs(max(sq.x, sq.y) - 3.0 * pe);
+        dots = max(dots, settled * 0.8 * stroke(box, 1.4 * pe, pe));
+    }
+    if (probeOn > 0.0 && (nearRayH || nearRayV))
+    {
+        // The +x ray's crossings, and the +y ray's: rings sit on the rays,
+        // so only a pixel beside one can be in one.
+        float2 th = nearRayH ? crossings(a.y, c.y, z.y, probe.y) : float2(-1.0, -1.0);
+        float2 tv = nearRayV ? crossings(a.x, c.x, z.x, probe.x) : float2(-1.0, -1.0);
+        for (uint k = 0u; k < 4u; ++k)
+        {
+            float tt = k < 2u ? th[k] : tv[k - 2u];
+            if (tt < 0.0)
+            {
+                continue;
+            }
+            float2 at = bezier(a, c, z, tt);
+            float2 slope = lerp(c - a, z - c, tt);
+            bool ahead = k < 2u ? at.x > probe.x : at.y > probe.y;
+            if (!ahead)
+            {
+                continue;
+            }
+            float ring = stroke(abs(length(e - at) - 6.0 * pe), 2.0 * pe, pe);
+            if (ring > rings)
+            {
+                rings = ring;
+                ringSign = (k < 2u ? slope.y : -slope.x) > 0.0 ? 1.0 : -1.0;
+            }
+        }
+    }
+}
+
 /// The hero glyph as Slug sees it: its bands, its curves drawing themselves
 /// on, their control points, and a probe sample casting the two rays the
 /// coverage walk casts, with every crossing it counts.
@@ -805,59 +888,32 @@ float3 overlay(float3 colour, float2 world, float px)
     float dots = 0.0;
     float rings = 0.0;
     float ringSign = 0.0;
-    for (uint ci = sc.curve_min; ci <= sc.curve_max; ++ci)
+    // Nothing this draws reaches further from a curve's control box than a
+    // dot's radius, or further from a ray than a ring's: past that, a curve
+    // costs one box test and nothing else.
+    float reach = 8.0 * pe;
+    bool nearRayH = abs(e.y - probe.y) < reach && e.x > probe.x - reach;
+    bool nearRayV = abs(e.x - probe.x) < reach && e.y > probe.y - reach;
+    // The curves near `e` are the ones its bands name: the horizontal bands
+    // within reach of its y, and the vertical ones within reach of its x (a
+    // band leaves out the curves flat along it, which the other direction's
+    // bands hold). A curve in two of them is drawn twice, to the same result.
+    float4 bt = g.band_transform;
+    int hlo = clamp(int(floor((e.y - reach) * bt.y + bt.w)), 0, int(g.hband_count) - 1);
+    int hhi = clamp(int(floor((e.y + reach) * bt.y + bt.w)), 0, int(g.hband_count) - 1);
+    int vlo = clamp(int(floor((e.x - reach) * bt.x + bt.z)), 0, int(g.vband_count) - 1);
+    int vhi = clamp(int(floor((e.x + reach) * bt.x + bt.z)), 0, int(g.vband_count) - 1);
+    uint hbands = uint(hhi - hlo + 1);
+    uint near = hbands + uint(vhi - vlo + 1);
+    for (uint k = 0u; k < near; ++k)
     {
-        TextPoint here = textPoints[ci];
-        // A contour's tail entry carries its closing point twice and starts no
-        // curve.
-        if (all(here.c == here.p))
+        uint index = k < hbands ? g.band_base + uint(hlo) + k
+                                : g.band_base + g.hband_count + uint(vlo) + (k - hbands);
+        TextBand band = textBands[index];
+        for (uint j = 0u; j < band.count; ++j)
         {
-            continue;
-        }
-        float2 a = here.p;
-        float2 c = here.c;
-        float2 z = textPoints[ci + 1u].p;
-        float drawn = saturate(frame.hero.y * span - float(ci - sc.curve_min));
-        if (drawn > 0.0 && curves > 0.0)
-        {
-            // The part drawn so far, by de Casteljau: the same curve cut at
-            // `drawn`.
-            float2 c1 = lerp(a, c, drawn);
-            float2 z1 = bezier(a, c, z, drawn);
-            line = max(line, stroke(quadratic(e, a, c1, z1), 2.2 * pe, pe));
-            float settled = saturate(drawn * 4.0 - 3.0);
-            hull = max(hull, settled * stroke(min(segment(e, a, c), segment(e, c, z)), 1.0 * pe, pe));
-            dots = max(dots, settled * stroke(length(e - a), 7.0 * pe, pe));
-            float2 sq = abs(e - c);
-            float box = abs(max(sq.x, sq.y) - 3.0 * pe);
-            dots = max(dots, settled * 0.8 * stroke(box, 1.4 * pe, pe));
-        }
-        if (probeOn > 0.0)
-        {
-            // The +x ray's crossings, and the +y ray's.
-            float2 th = crossings(a.y, c.y, z.y, probe.y);
-            float2 tv = crossings(a.x, c.x, z.x, probe.x);
-            for (uint k = 0u; k < 4u; ++k)
-            {
-                float tt = k < 2u ? th[k] : tv[k - 2u];
-                if (tt < 0.0)
-                {
-                    continue;
-                }
-                float2 at = bezier(a, c, z, tt);
-                float2 slope = lerp(c - a, z - c, tt);
-                bool ahead = k < 2u ? at.x > probe.x : at.y > probe.y;
-                if (!ahead)
-                {
-                    continue;
-                }
-                float ring = stroke(abs(length(e - at) - 6.0 * pe), 2.0 * pe, pe);
-                if (ring > rings)
-                {
-                    rings = ring;
-                    ringSign = (k < 2u ? slope.y : -slope.x) > 0.0 ? 1.0 : -1.0;
-                }
-            }
+            overlayCurve(textBandCurves[band.first + j], e, pe, reach, probe, nearRayH, nearRayV,
+                         span, sc.curve_min, line, hull, dots, rings, ringSign);
         }
     }
 
@@ -911,6 +967,42 @@ uint pack(float3 c, bool bgra)
     return v.x | (v.y << 8u) | (v.z << 16u) | (0xFFu << 24u);
 }
 
+/// The camera, and which blocks reach the screen: one thread, once a frame,
+/// after the typesetter has placed everything.
+[shader("compute")]
+[numthreads(1, 1, 1)]
+void reel_view(uint3 tid: SV_DispatchThreadID)
+{
+    float3 cam = camera();
+    float2 size = float2(frame.counts.yz);
+    // What the screen shows of the world. The lens shows a part of what lies
+    // under it, so it never widens this.
+    float2 lo = -size * 0.5 / cam.z + cam.xy;
+    float2 hi = size * 0.5 / cam.z + cam.xy;
+    uint count = 0u;
+    for (uint bi = 0u; bi < frame.counts.x && count < MAX_VISIBLE; ++bi)
+    {
+        ReelBlock b = blocks[bi];
+        ReelBlockOut o = block_out[bi];
+        if (b.opacity <= 0.0 || o.glyphs == 0u)
+        {
+            continue;
+        }
+        bool screen = (b.flags & BLOCK_SCREEN) != 0u;
+        float pad = b.size * (0.5 + abs(frame.look.y));
+        float2 vlo = screen ? float2(0.0, 0.0) : lo;
+        float2 vhi = screen ? size : hi;
+        if (o.rect.z + pad < vlo.x || o.rect.x - pad > vhi.x || o.rect.w + pad < vlo.y || o.rect.y - pad > vhi.y)
+        {
+            continue;
+        }
+        view[0].list[count >> 2u][count & 3u] = bi | (screen ? VISIBLE_SCREEN : 0u);
+        count += 1u;
+    }
+    view[0].camera = float4(cam, 0.0);
+    view[0].count = count;
+}
+
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void reel_frame(uint3 dispatched: SV_DispatchThreadID)
@@ -927,7 +1019,7 @@ void reel_frame(uint3 dispatched: SV_DispatchThreadID)
     float t = frame.clock.x;
     float2 s = float2(tid.xy) + 0.5;
     float2 size = float2(width, height);
-    float3 cam = camera();
+    float3 cam = view[0].camera.xyz;
 
     // How far one pixel reaches in the world here, along each axis: the
     // camera's zoom, and the lens's magnification where it is over.

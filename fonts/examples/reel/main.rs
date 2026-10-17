@@ -17,9 +17,13 @@
 //!
 //! `--live` plays it in a window instead, in real time and on a loop, the
 //! frames going from the image buffer straight to the swapchain (Escape
-//! quits); the window is the `live` feature, so that is `cargo run -p
-//! punchcutter-fonts --features live --example reel -- --live`. `--still <seconds> <file.png>` writes one frame. `--size WxH`,
-//! `--fps N`, `--from <s>` and `--to <s>` change what is rendered, and
+//! quits). The window is the `live` feature, so `--live` is `cargo run -p
+//! punchcutter-fonts --features live --example reel -- --live`. `--profile`
+//! prints each pass's GPU time every two seconds, from timestamp queries, and
+//! `--samples 1|4` sets the coverage samples a pixel (four offline; live, by
+//! the window's size). `--still <seconds> <file.png>` writes one frame.
+//! `--size WxH`, `--fps N`, `--from <s>` and `--to <s>` change what is
+//! rendered, and
 //! `--font <path>` the face (else fontconfig's EB Garamond, else Noto Serif).
 //! The adapter is chosen as `text/examples/render.rs` chooses it, integrated
 //! or software, unless `--adapter discrete` asks for a discrete GPU: a render
@@ -134,7 +138,7 @@ struct Frame {
     out: [u32; 4],
     partial: [u32; 4],
     run_list: [[u32; 4]; 4],
-    block_list: [[u32; 4]; 4],
+    block_list: [[u32; 4]; 8],
 }
 
 /// `Frame::partial`: shape, or set, all of them.
@@ -151,6 +155,8 @@ const GLYPH_BYTES: u64 = 32;
 const LINE_BYTES: u64 = 16;
 const BLOCK_OUT_BYTES: u64 = 32;
 const SCENE_BYTES: u64 = 32;
+/// `ReelView`: a camera, a count, and `MAX_VISIBLE` block indices.
+const VIEW_BYTES: u64 = 16 + 16 + 64 * 4;
 
 // ---------------------------------------------------------------------------
 // The text
@@ -305,17 +311,28 @@ impl Reel {
         index
     }
 
-    /// The strings and blocks being typed: the only ones whose shaping or
-    /// setting changes from one frame to the next.
-    fn typing(&self) -> (Vec<u32>, Vec<u32>) {
+    /// The strings to shape again, and the blocks to set again, given this
+    /// frame's `requests` and the length each string had when it was last
+    /// shaped: a string part way through being typed, and one whose length
+    /// has changed since (it finished, or the reel started again).
+    fn typing(&self, requests: &[ShapeRequest], shaped: &[u32]) -> (Vec<u32>, Vec<u32>) {
         let mut runs = Vec::new();
         let mut blocks = Vec::new();
         for (b, block) in self.blocks.iter().enumerate() {
             if block.type_rate <= 0.0 || block.flags & BLOCK_REVEAL != 0 {
                 continue;
             }
-            blocks.push(b as u32);
-            runs.extend(block.run_first..block.run_first + block.run_count);
+            let before = runs.len();
+            for r in block.run_first..block.run_first + block.run_count {
+                let len = requests[r as usize].byte_len;
+                let full = self.texts[r as usize].len() as u32;
+                if len != shaped[r as usize] || (len > 0 && len < full) {
+                    runs.push(r);
+                }
+            }
+            if runs.len() > before {
+                blocks.push(b as u32);
+            }
         }
         (runs, blocks)
     }
@@ -758,7 +775,7 @@ fn direct(cast: &Cast, reel: &mut Reel, t: f32, width: u32, height: u32) -> Fram
         out: [width, 0, 0, 0],
         partial: [EVERY, EVERY, 0, 0],
         run_list: [[0; 4]; 4],
-        block_list: [[0; 4]; 4],
+        block_list: [[0; 4]; 8],
     }
 }
 
@@ -776,6 +793,10 @@ struct Args {
     font: Option<PathBuf>,
     discrete: bool,
     live: bool,
+    profile: bool,
+    /// Coverage samples a pixel, 1 or 4; unset, four offline and by the
+    /// window's size live.
+    samples: Option<u32>,
 }
 
 fn args() -> Result<Args> {
@@ -789,6 +810,8 @@ fn args() -> Result<Args> {
         font: None,
         discrete: false,
         live: false,
+        profile: false,
+        samples: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -805,6 +828,14 @@ fn args() -> Result<Args> {
             "--to" => out.to = value()?.parse()?,
             "--font" => out.font = Some(PathBuf::from(value()?)),
             "--live" => out.live = true,
+            "--profile" => out.profile = true,
+            "--samples" => {
+                out.samples = match value()?.as_str() {
+                    "1" => Some(1),
+                    "4" => Some(4),
+                    other => bail!("--samples is 1 or 4, not {other}"),
+                }
+            }
             "--adapter" => {
                 out.discrete = match value()?.as_str() {
                     "discrete" => true,
@@ -891,8 +922,12 @@ fn main() -> Result<()> {
         return live::run(args, fonts, readme);
     }
 
-    let gpu = Gpu::new(&instance(), args.discrete, None)?;
+    let gpu = Gpu::new(&instance(), args.discrete, args.profile, None)?;
     let mut renderer = Renderer::new(gpu, fonts, readme, args.width, args.height, false)?;
+    renderer.samples = args.samples.unwrap_or(4);
+    if args.profile {
+        renderer.profiler = Some(Profiler::new(&renderer.gpu));
+    }
     let times: Vec<f32> = match &args.still {
         Some((t, _)) => vec![*t],
         None => {
@@ -928,6 +963,9 @@ fn main() -> Result<()> {
         }
     }
     stdout.flush()?;
+    if let Some(profiler) = renderer.profiler.as_mut() {
+        profiler.report();
+    }
     eprintln!("adapter used: {}", renderer.gpu.name);
     Ok(())
 }
@@ -978,6 +1016,14 @@ struct Renderer {
     /// Whether every string has been shaped and every block set at least
     /// once at this size. After that a frame does only the typed ones.
     settled: bool,
+    /// Each string's length when it was last shaped.
+    shaped: Vec<u32>,
+    /// Blocks to set again on the next frame whatever the typing does: the
+    /// captions, after a resize moves them.
+    #[cfg_attr(not(feature = "live"), allow(dead_code))]
+    reset: Vec<u32>,
+    /// `--profile`'s timestamps, when asked for.
+    profiler: Option<Profiler>,
     /// For reading frames back to the CPU, made on the first read.
     readback: Option<wgpu::Buffer>,
 }
@@ -1013,7 +1059,7 @@ impl Renderer {
         let started = Instant::now();
         let program = punchcutter_slang::compile_program(
             &source,
-            &["reel_shape", "reel_typeset", "reel_frame"],
+            &["reel_shape", "reel_typeset", "reel_view", "reel_frame"],
             &punchcutter_slang::Options::default(),
         )
         .map_err(|err| anyhow::anyhow!("{err}"))?;
@@ -1056,6 +1102,7 @@ impl Renderer {
             block_out: gpu.storage("block-out", &[], reel.blocks.len() as u64 * BLOCK_OUT_BYTES),
             scene: gpu.storage("scene", &[], SCENE_BYTES),
             image: gpu.storage("image", &[], u64::from(pitch) * u64::from(height) * 4),
+            view: gpu.storage("view", &[], VIEW_BYTES),
             curves: loaded
                 .curve_bytes()
                 .iter()
@@ -1078,6 +1125,9 @@ impl Renderer {
             bgra,
             samples: 4,
             settled: false,
+            shaped: Vec::new(),
+            reset: Vec::new(),
+            profiler: None,
             readback: None,
         })
     }
@@ -1093,12 +1143,15 @@ impl Renderer {
                 .storage("image", &[], u64::from(self.pitch) * u64::from(height) * 4);
         self.groups = self.gpu.groups(&self.buffers);
         self.readback = None;
-        self.settled = false;
-        // Only the blocks depend on the size; the strings and the slots they
-        // were given are the same.
+        // Only the captions depend on the size: the strings, their shaping
+        // and every block in the world stay as they are, and the captions,
+        // placed in pixels, are set again on the next frame.
         let mut fresh = Reel::default();
         self.cast = script(&mut fresh, &self.readme, height as f32);
         self.reel.blocks = fresh.blocks;
+        self.reset = (0..self.reel.blocks.len() as u32)
+            .filter(|&b| self.reel.blocks[b as usize].flags & BLOCK_SCREEN != 0)
+            .collect();
     }
 
     /// Shape, typeset and draw the frame at `t` into the image buffer.
@@ -1109,8 +1162,25 @@ impl Renderer {
         // What changes from frame to frame is the typing: those strings are
         // shaped again and those blocks set again, and nothing else is, once
         // everything has been done once.
-        let (runs, blocks) = reel.typing();
-        let partial = self.settled && runs.len() <= 16 && blocks.len() <= 16;
+        let requests = reel.requests_at(t);
+        let (runs, mut blocks) = if self.settled {
+            reel.typing(&requests, &self.shaped)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        for b in self.reset.drain(..) {
+            if !blocks.contains(&b) {
+                blocks.push(b);
+            }
+        }
+        let partial = self.settled && runs.len() <= 16 && blocks.len() <= 32;
+        if partial {
+            for &r in &runs {
+                self.shaped[r as usize] = requests[r as usize].byte_len;
+            }
+        } else {
+            self.shaped = requests.iter().map(|request| request.byte_len).collect();
+        }
         if partial {
             frame.partial = [runs.len() as u32, blocks.len() as u32, 0, 0];
             for (i, &r) in runs.iter().enumerate() {
@@ -1135,11 +1205,8 @@ impl Renderer {
             .write_buffer(&self.buffers.frame, 0, bytes_of(&frame));
         gpu.queue
             .write_buffer(&self.buffers.blocks, 0, bytes_of_slice(&reel.blocks));
-        gpu.queue.write_buffer(
-            &self.buffers.requests,
-            0,
-            bytes_of_slice(&reel.requests_at(t)),
-        );
+        gpu.queue
+            .write_buffer(&self.buffers.requests, 0, bytes_of_slice(&requests));
 
         let mut encoder = gpu
             .device
@@ -1147,38 +1214,43 @@ impl Renderer {
                 label: Some("reel"),
             });
         let groups = &self.groups;
-        let dispatch = |encoder: &mut wgpu::CommandEncoder, pass, x, y| {
-            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("reel-pass"),
-                timestamp_writes: None,
-            });
-            cpass.set_pipeline(pass);
-            cpass.set_bind_group(0, &groups.0, &[]);
-            cpass.set_bind_group(1, &groups.1, &[]);
-            cpass.dispatch_workgroups(x, y, 1);
-        };
-        dispatch(
-            &mut encoder,
-            &self.passes.shape,
-            shape_threads.div_ceil(64).max(1),
-            1,
-        );
-        dispatch(
-            &mut encoder,
-            &self.passes.typeset,
-            typeset_threads.div_ceil(64).max(1),
-            1,
-        );
+        let profiler = self.profiler.as_ref();
+        // `stamps`: which of the pass's begin and end timestamps to write, when
+        // profiling; a strip writes only the begin, or only the end, or neither.
+        let dispatch =
+            |encoder: &mut wgpu::CommandEncoder, pass, x, y, which: usize, stamps: (bool, bool)| {
+                let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("reel-pass"),
+                    timestamp_writes: profiler
+                        .filter(|_| stamps.0 || stamps.1)
+                        .map(|p| p.writes(which, stamps)),
+                });
+                cpass.set_pipeline(pass);
+                cpass.set_bind_group(0, &groups.0, &[]);
+                cpass.set_bind_group(1, &groups.1, &[]);
+                cpass.dispatch_workgroups(x, y, 1);
+            };
+        // A frame where nothing is being typed shapes and sets nothing.
+        let ran = [shape_threads > 0, typeset_threads > 0, true];
+        if ran[0] {
+            let x = shape_threads.div_ceil(64);
+            dispatch(&mut encoder, &self.passes.shape, x, 1, 0, (true, true));
+        }
+        if ran[1] {
+            let x = typeset_threads.div_ceil(64);
+            dispatch(&mut encoder, &self.passes.typeset, x, 1, 1, (true, true));
+        }
+        // One thread, untimed: the camera and the blocks on screen.
+        dispatch(&mut encoder, &self.passes.view, 1, 1, 0, (false, false));
         if gpu.discrete {
             // A GPU the desktop is not drawing on takes the whole frame in
             // one dispatch.
-            dispatch(
-                &mut encoder,
-                &self.passes.frame,
-                self.width.div_ceil(8),
-                self.height.div_ceil(8),
-            );
+            let (x, y) = (self.width.div_ceil(8), self.height.div_ceil(8));
+            dispatch(&mut encoder, &self.passes.frame, x, y, 2, (true, true));
             gpu.queue.submit([encoder.finish()]);
+            if let Some(profiler) = self.profiler.as_mut() {
+                profiler.collect(&self.gpu, ran)?;
+            }
             return Ok(());
         }
         gpu.queue.submit([encoder.finish()]);
@@ -1195,16 +1267,21 @@ impl Renderer {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("reel-strip"),
                 });
-            dispatch(
-                &mut encoder,
-                &self.passes.frame,
+            let (x, y) = (
                 self.width.div_ceil(8),
                 STRIP.min(self.height - top).div_ceil(8),
             );
+            // The draw's time runs from the first strip's start to the last
+            // strip's end, the desktop's turns between them included.
+            let stamps = (top == 0, top + STRIP >= self.height);
+            dispatch(&mut encoder, &self.passes.frame, x, y, 2, stamps);
             gpu.queue.submit([encoder.finish()]);
             gpu.device
                 .poll(wgpu::PollType::wait_indefinitely())
                 .map_err(|err| anyhow::anyhow!("a strip never finished: {err}"))?;
+        }
+        if let Some(profiler) = self.profiler.as_mut() {
+            profiler.collect(&self.gpu, ran)?;
         }
         Ok(())
     }
@@ -1308,6 +1385,186 @@ fn write_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// Profiling
+// ---------------------------------------------------------------------------
+
+/// The passes `--profile` times, in timestamp-pair order.
+const PASSES: [&str; 3] = ["shape", "typeset", "draw"];
+
+/// Each pass's GPU time, from a begin and an end timestamp written by the
+/// pass itself, averaged over two seconds at a time.
+///
+/// It never waits for the GPU: a frame's timestamps are copied out and asked
+/// for, and read on a later frame once they have arrived; frames drawn in
+/// between are not sampled. Waiting would let the GPU idle between frames and
+/// clock down, which is a different machine from the one being measured.
+struct Profiler {
+    queries: wgpu::QuerySet,
+    resolve: wgpu::Buffer,
+    readback: wgpu::Buffer,
+    /// Nanoseconds a timestamp tick.
+    period: f64,
+    /// Milliseconds summed, and frames that ran the pass, since `since`.
+    sums: [f64; 3],
+    counts: [u32; 3],
+    /// The longest each pass took, since `since`: a frame that misses the
+    /// display's interval is a worst case an average hides.
+    worst: [f64; 3],
+    frames: u32,
+    since: Instant,
+    /// The passes a sampled frame ran, while its timestamps are on their way.
+    pending: Option<([bool; 3], Mapping)>,
+}
+
+/// Where a buffer's `map_async` says it is done.
+type Mapping = std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>;
+
+impl Profiler {
+    fn new(gpu: &Gpu) -> Profiler {
+        let bytes = (PASSES.len() * 2 * size_of::<u64>()) as u64;
+        Profiler {
+            queries: gpu.device.create_query_set(&wgpu::QuerySetDescriptor {
+                label: Some("reel-profile"),
+                ty: wgpu::QueryType::Timestamp,
+                count: PASSES.len() as u32 * 2,
+            }),
+            resolve: gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("reel-profile-resolve"),
+                size: bytes,
+                usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }),
+            readback: gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("reel-profile-readback"),
+                size: bytes,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            period: f64::from(gpu.queue.get_timestamp_period()),
+            sums: [0.0; 3],
+            counts: [0; 3],
+            worst: [0.0; 3],
+            frames: 0,
+            since: Instant::now(),
+            pending: None,
+        }
+    }
+
+    /// The timestamps pass `which` writes: its begin, its end, or both.
+    fn writes(
+        &self,
+        which: usize,
+        (begin, end): (bool, bool),
+    ) -> wgpu::ComputePassTimestampWrites<'_> {
+        let at = which as u32 * 2;
+        wgpu::ComputePassTimestampWrites {
+            query_set: &self.queries,
+            beginning_of_pass_write_index: begin.then_some(at),
+            end_of_pass_write_index: end.then_some(at + 1),
+        }
+    }
+
+    /// Take the timestamps of an earlier frame if they have arrived, and ask
+    /// for this frame's, which ran the passes in `ran`, if none are on their
+    /// way. Prints the averages every two seconds.
+    fn collect(&mut self, gpu: &Gpu, ran: [bool; 3]) -> Result<()> {
+        if let Some((sampled, rx)) = &self.pending {
+            gpu.device
+                .poll(wgpu::PollType::Poll)
+                .map_err(|err| anyhow::anyhow!("the profile poll failed: {err}"))?;
+            match rx.try_recv() {
+                Ok(mapped) => {
+                    mapped.context("the timestamps would not map")?;
+                    let sampled = *sampled;
+                    self.read(sampled)?;
+                    self.pending = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    bail!("the timestamps' map callback was dropped")
+                }
+            }
+        }
+        if self.pending.is_none() {
+            let mut encoder = gpu
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("reel-profile"),
+                });
+            let count = PASSES.len() as u32 * 2;
+            encoder.resolve_query_set(&self.queries, 0..count, &self.resolve, 0);
+            encoder.copy_buffer_to_buffer(&self.resolve, 0, &self.readback, 0, self.resolve.size());
+            gpu.queue.submit([encoder.finish()]);
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            self.readback
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, move |r| {
+                    let _ = tx.send(r);
+                });
+            self.pending = Some((ran, rx));
+        }
+        if self.since.elapsed().as_secs_f32() >= 2.0 {
+            self.report();
+        }
+        Ok(())
+    }
+
+    /// The mapped timestamps of a frame that ran the passes in `ran`.
+    fn read(&mut self, ran: [bool; 3]) -> Result<()> {
+        {
+            let view = self
+                .readback
+                .slice(..)
+                .get_mapped_range()
+                .map_err(|err| anyhow::anyhow!("the timestamps are unavailable: {err}"))?;
+            let tick = |i: usize| {
+                u64::from_le_bytes(view[i * 8..i * 8 + 8].try_into().expect("eight bytes"))
+            };
+            for (pass, &did) in ran.iter().enumerate() {
+                if did {
+                    let ticks = tick(pass * 2 + 1).wrapping_sub(tick(pass * 2));
+                    let ms = ticks as f64 * self.period / 1e6;
+                    self.sums[pass] += ms;
+                    self.worst[pass] = self.worst[pass].max(ms);
+                    self.counts[pass] += 1;
+                }
+            }
+        }
+        self.readback.unmap();
+        self.frames += 1;
+        Ok(())
+    }
+
+    /// The averages since the last report, then start again.
+    fn report(&mut self) {
+        if self.frames == 0 {
+            return;
+        }
+        let mut line = format!("profile, {} frames sampled:", self.frames);
+        let mut total = 0.0;
+        for (pass, name) in PASSES.iter().enumerate() {
+            if self.counts[pass] == 0 {
+                line += &format!(" {name} -");
+                continue;
+            }
+            let mean = self.sums[pass] / f64::from(self.counts[pass]);
+            total += self.sums[pass];
+            line += &format!(" {name} {mean:.2} ms (worst {:.2})", self.worst[pass]);
+            if self.counts[pass] < self.frames {
+                line += &format!(" (in {} frames)", self.counts[pass]);
+            }
+        }
+        line += &format!("; GPU {:.2} ms a frame", total / f64::from(self.frames));
+        eprintln!("{line}");
+        self.sums = [0.0; 3];
+        self.counts = [0; 3];
+        self.worst = [0.0; 3];
+        self.frames = 0;
+        self.since = Instant::now();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The device
 // ---------------------------------------------------------------------------
 
@@ -1367,6 +1624,7 @@ fn instance() -> wgpu::Instance {
 struct Passes {
     shape: wgpu::ComputePipeline,
     typeset: wgpu::ComputePipeline,
+    view: wgpu::ComputePipeline,
     frame: wgpu::ComputePipeline,
 }
 
@@ -1385,12 +1643,13 @@ struct Buffers {
     block_out: wgpu::Buffer,
     scene: wgpu::Buffer,
     image: wgpu::Buffer,
+    view: wgpu::Buffer,
     curves: Vec<wgpu::Buffer>,
 }
 
 /// Set 0's bindings, in order: `true` for a uniform, else a storage buffer
 /// and whether it is read-only.
-const SET0: [(bool, bool); 14] = [
+const SET0: [(bool, bool); 15] = [
     (true, true),   // params
     (false, true),  // requests
     (false, true),  // ot
@@ -1405,6 +1664,7 @@ const SET0: [(bool, bool); 14] = [
     (false, false), // block_out
     (false, false), // scene
     (false, false), // image
+    (false, false), // view
 ];
 
 impl Gpu {
@@ -1413,6 +1673,7 @@ impl Gpu {
     fn new(
         instance: &wgpu::Instance,
         discrete: bool,
+        profile: bool,
         surface: Option<&wgpu::Surface<'_>>,
     ) -> Result<Gpu> {
         let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::VULKAN));
@@ -1443,6 +1704,12 @@ impl Gpu {
         {
             bail!("adapter '{}' lacks PASSTHROUGH_SHADERS", info.name);
         }
+        if profile && !adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+            bail!(
+                "adapter '{}' has no timestamp queries to profile with",
+                info.name
+            );
+        }
 
         let wanted = SET0.iter().filter(|(uniform, _)| !uniform).count() as u32 + 4;
         let ceiling = adapter.limits().max_storage_buffers_per_shader_stage;
@@ -1459,7 +1726,11 @@ impl Gpu {
             &adapter,
             &wgpu::DeviceDescriptor {
                 label: Some("reel-device"),
-                required_features: wgpu::Features::PASSTHROUGH_SHADERS,
+                required_features: if profile {
+                    wgpu::Features::PASSTHROUGH_SHADERS | wgpu::Features::TIMESTAMP_QUERY
+                } else {
+                    wgpu::Features::PASSTHROUGH_SHADERS
+                },
                 required_limits: limits,
                 ..Default::default()
             },
@@ -1543,6 +1814,7 @@ impl Gpu {
         let passes = Passes {
             shape: make("reel_shape", (64, 1, 1))?,
             typeset: make("reel_typeset", (64, 1, 1))?,
+            view: make("reel_view", (1, 1, 1))?,
             frame: make("reel_frame", (8, 8, 1))?,
         };
         if let Some(err) = pollster::block_on(scope.pop()) {
@@ -1596,6 +1868,7 @@ impl Gpu {
             &b.block_out,
             &b.scene,
             &b.image,
+            &b.view,
         ];
         let entries: Vec<_> = set0
             .iter()

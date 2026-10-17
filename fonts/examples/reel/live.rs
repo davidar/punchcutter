@@ -51,7 +51,11 @@ struct Showing {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     renderer: Renderer,
-    started: Instant,
+    /// `--samples`, when given, which a resize then leaves alone.
+    samples: Option<u32>,
+    /// When the first frame reached the screen: the reel's clock, and the
+    /// frame rate's, start there rather than when the window was made.
+    started: Option<Instant>,
     /// Frames presented since `since`, for the rate printed every few seconds.
     frames: u32,
     since: Instant,
@@ -67,7 +71,12 @@ impl Live {
         let surface = instance
             .create_surface(window.clone())
             .context("the window would not give a Vulkan surface")?;
-        let gpu = Gpu::new(&instance, self.args.discrete, Some(&surface))?;
+        let gpu = Gpu::new(
+            &instance,
+            self.args.discrete,
+            self.args.profile,
+            Some(&surface),
+        )?;
 
         // The frame reaches the swapchain by a copy, so the swapchain has to
         // take one, in a format whose bytes are the image buffer's.
@@ -101,7 +110,19 @@ impl Live {
         let (fonts, readme) = self.assets.take().context("the window opened twice")?;
         let bgra = matches!(format, F::Bgra8Unorm | F::Bgra8UnormSrgb);
         let mut renderer = Renderer::new(gpu, fonts, readme, width, height, bgra)?;
-        renderer.samples = samples_for(width, height);
+        renderer.samples = self.args.samples.unwrap_or(samples_for(width, height));
+        if self.args.profile {
+            renderer.profiler = Some(crate::Profiler::new(&renderer.gpu));
+        }
+        // The first frame shapes every string and sets every block, a fifth
+        // of a second; it is done here, before the clock starts, so the reel
+        // opens on its first frame rather than a fifth of a second in.
+        renderer.draw(self.args.from)?;
+        renderer
+            .gpu
+            .device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|err| anyhow::anyhow!("the first frame never finished: {err}"))?;
         eprintln!(
             "live on {}: {width}x{height}, {format:?}, {} sample(s) a pixel; Escape quits",
             renderer.gpu.name, renderer.samples
@@ -111,7 +132,8 @@ impl Live {
             surface,
             config,
             renderer,
-            started: Instant::now(),
+            samples: self.args.samples,
+            started: None,
             frames: 0,
             since: Instant::now(),
         })
@@ -139,11 +161,14 @@ impl Showing {
         self.surface
             .configure(&self.renderer.gpu.device, &self.config);
         self.renderer.resize(width, height);
-        self.renderer.samples = samples_for(width, height);
+        if self.samples.is_none() {
+            self.renderer.samples = samples_for(width, height);
+        }
     }
 
     fn frame(&mut self, from: f32, to: f32) -> Result<()> {
-        let t = from + self.started.elapsed().as_secs_f32() % (to - from);
+        let elapsed = self.started.map_or(0.0, |at| at.elapsed().as_secs_f32());
+        let t = from + elapsed % (to - from);
         self.renderer.draw(t)?;
 
         let texture = match self.surface.get_current_texture() {
@@ -172,6 +197,11 @@ impl Showing {
         self.window.pre_present_notify();
         self.renderer.gpu.queue.present(texture);
 
+        if self.started.is_none() {
+            self.started = Some(Instant::now());
+            self.since = Instant::now();
+            return Ok(());
+        }
         self.frames += 1;
         let elapsed = self.since.elapsed().as_secs_f32();
         if elapsed >= 3.0 {

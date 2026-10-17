@@ -214,7 +214,10 @@ image buffer to the swapchain on the GPU:
 cargo run -p punchcutter-fonts --features live --example reel -- --live --adapter discrete
 ```
 
-The window is the `live` feature, so the tests never build a window system. It sets EB Garamond
+The window is the `live` feature, so the tests never build a window system.
+`--profile` prints each pass's GPU time, mean and worst, every two seconds,
+from timestamp queries that never stall a frame; `--samples 1|4` sets the
+coverage samples a pixel. It sets EB Garamond
 when fontconfig has it (else Noto Serif, or `--font <path>`), and picks its
 adapter as the render example does unless `--adapter discrete` asks for a
 discrete GPU, which is the better place for a long render: it leaves the GPU
