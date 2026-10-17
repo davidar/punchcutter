@@ -480,11 +480,12 @@ const BOARD: &[(&str, &str, &[Feature])] = &[
     ("small capitals", "Small Capitals For Headings", SMCP),
     ("old-style figures", "Founded 1879, rebuilt 2026", ONUM),
     ("fractions", "1/2 cup · 3/4 inch · 7/8 mile", FRAC),
-    // Bases and marks no precomposed character covers, so the marks are
-    // placed by the font's GPOS anchors, not swapped for another glyph.
+    // Bases and marks no precomposed character covers, each of them one the
+    // font gives an anchor, so the marks are placed by its GPOS: a base the
+    // font has no anchor on leaves its mark where the mark's outline puts it.
     (
         "mark attachment",
-        "x\u{302} · n\u{306} · g\u{303} · q\u{303}",
+        "x\u{302} · n\u{306} · g\u{303} · w\u{303}",
         &[],
     ),
     ("fallback faces", "活字 · 日本語 · Ελληνικά", &[]),
