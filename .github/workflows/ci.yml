@@ -56,6 +56,10 @@ jobs:
       - name: Check, with warnings as errors
         run: cargo check --locked --workspace --all-targets
 
+      # The demo reel's window, which the workspace build leaves out.
+      - name: The demo reel with its window
+        run: cargo check --locked -p punchcutter-fonts --example reel --features live
+
       # The types-only build a consumer that never compiles takes.
       - name: The compiler crate without its compiler
         run: cargo check --locked -p punchcutter-slang --no-default-features

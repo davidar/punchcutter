@@ -15,13 +15,19 @@
 //!     -c:v libx264 -pix_fmt yuv420p -crf 18 reel.mp4
 //! ```
 //!
-//! `--still <seconds> <file.png>` writes one frame instead. `--size WxH`,
+//! `--live` plays it in a window instead, in real time and on a loop, the
+//! frames going from the image buffer straight to the swapchain (Escape
+//! quits); the window is the `live` feature, so that is `cargo run -p
+//! punchcutter-fonts --features live --example reel -- --live`. `--still <seconds> <file.png>` writes one frame. `--size WxH`,
 //! `--fps N`, `--from <s>` and `--to <s>` change what is rendered, and
 //! `--font <path>` the face (else fontconfig's EB Garamond, else Noto Serif).
 //! The adapter is chosen as `text/examples/render.rs` chooses it, integrated
 //! or software, unless `--adapter discrete` asks for a discrete GPU: a render
 //! of half a minute is worth waking one for, and a GPU the desktop is not
 //! drawing on leaves the desktop alone while it works.
+
+#[cfg(feature = "live")]
+mod live;
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -125,7 +131,14 @@ struct Frame {
     probe: [f32; 4],
     look: [f32; 4],
     counts: [u32; 4],
+    out: [u32; 4],
+    partial: [u32; 4],
+    run_list: [[u32; 4]; 4],
+    block_list: [[u32; 4]; 4],
 }
+
+/// `Frame::partial`: shape, or set, all of them.
+const EVERY: u32 = u32::MAX;
 
 // SAFETY: `#[repr(C)]` aggregates of 4-byte leaves with no implicit padding.
 unsafe impl Plain for Block {}
@@ -290,6 +303,21 @@ impl Reel {
         self.glyphs += glyph_cap;
         self.lines += line_cap;
         index
+    }
+
+    /// The strings and blocks being typed: the only ones whose shaping or
+    /// setting changes from one frame to the next.
+    fn typing(&self) -> (Vec<u32>, Vec<u32>) {
+        let mut runs = Vec::new();
+        let mut blocks = Vec::new();
+        for (b, block) in self.blocks.iter().enumerate() {
+            if block.type_rate <= 0.0 || block.flags & BLOCK_REVEAL != 0 {
+                continue;
+            }
+            blocks.push(b as u32);
+            runs.extend(block.run_first..block.run_first + block.run_count);
+        }
+        (runs, blocks)
     }
 
     /// The requests as this frame shapes them: a block being typed has only
@@ -727,6 +755,10 @@ fn direct(cast: &Cast, reel: &mut Reel, t: f32, width: u32, height: u32) -> Fram
             t * 3.2,
         ],
         counts: [reel.blocks.len() as u32, width, height, 0],
+        out: [width, 0, 0, 0],
+        partial: [EVERY, EVERY, 0, 0],
+        run_list: [[0; 4]; 4],
+        block_list: [[0; 4]; 4],
     }
 }
 
@@ -743,6 +775,7 @@ struct Args {
     still: Option<(f32, PathBuf)>,
     font: Option<PathBuf>,
     discrete: bool,
+    live: bool,
 }
 
 fn args() -> Result<Args> {
@@ -755,6 +788,7 @@ fn args() -> Result<Args> {
         still: None,
         font: None,
         discrete: false,
+        live: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -770,6 +804,7 @@ fn args() -> Result<Args> {
             "--from" => out.from = value()?.parse()?,
             "--to" => out.to = value()?.parse()?,
             "--font" => out.font = Some(PathBuf::from(value()?)),
+            "--live" => out.live = true,
             "--adapter" => {
                 out.discrete = match value()?.as_str() {
                     "discrete" => true,
@@ -826,8 +861,11 @@ fn chain(primary: &Path) -> Chain {
 
 fn main() -> Result<()> {
     let args = args()?;
-    if args.still.is_none() && std::io::stdout().is_terminal() {
-        bail!("the frames are raw RGBA on stdout; pipe them to an encoder (see the header)");
+    if !args.live && args.still.is_none() && std::io::stdout().is_terminal() {
+        bail!(
+            "the frames are raw RGBA on stdout; pipe them to an encoder, or pass --live \
+             (see the header)"
+        );
     }
     // Pinning the loader to the integrated GPU's driver would hide a discrete
     // one, so it is only done when the integrated one is wanted.
@@ -841,107 +879,20 @@ fn main() -> Result<()> {
         eprintln!("VK_DRIVER_FILES was unset; pinned to {icd}");
     }
 
-    // --- the font, and everything it will be asked to draw ----------------
-
-    let (family, path) = face(args.font.clone())?;
-    let loaded = Loaded::load_path(&family, &path).map_err(anyhow::Error::msg)?;
-    eprintln!(
-        "font: {family} ({}), {} glyphs, {} curve buffers",
-        path.display(),
-        loaded.font_glyphs,
-        loaded.start()
-    );
-    let mut fonts = Merged::with_chain(loaded, chain(&path));
-
-    let readme_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../README.md");
-    let readme = std::fs::read_to_string(&readme_path)
-        .with_context(|| format!("could not read {}", readme_path.display()))?;
-    let mut reel = Reel::default();
-    let cast = script(&mut reel, &readme, args.height as f32);
-    let everything: String = reel.texts.concat();
-    let cover = fonts.cover(&everything);
-    for face in &cover.faces {
-        eprintln!(
-            "fallback: {} codepoints from {}",
-            face.codepoints, face.family
+    if args.live && !cfg!(feature = "live") {
+        bail!(
+            "--live needs the window, which is the `live` feature: \
+             cargo run -p punchcutter-fonts --features live --example reel -- --live"
         );
     }
-    eprintln!(
-        "{} strings in {} blocks, {} glyph slots, {} line slots",
-        reel.runs.len(),
-        reel.blocks.len(),
-        reel.glyphs,
-        reel.lines
-    );
-
-    // --- the device and the three passes -----------------------------------
-
-    let gpu = Gpu::new(args.discrete)?;
-    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/reel/reel.slang");
-    let started = Instant::now();
-    let program = punchcutter_slang::compile_program(
-        &source,
-        &["reel_shape", "reel_typeset", "reel_frame"],
-        &punchcutter_slang::Options::default(),
-    )
-    .map_err(|err| anyhow::anyhow!("{err}"))?;
-    for line in program.warnings.lines() {
-        eprintln!("slang: {line}");
+    let (fonts, readme) = load(&args)?;
+    #[cfg(feature = "live")]
+    if args.live {
+        return live::run(args, fonts, readme);
     }
-    eprintln!(
-        "shaders compiled in {:.0} ms",
-        started.elapsed().as_secs_f64() * 1e3
-    );
-    let passes = gpu.passes(&program)?;
 
-    let loaded = &fonts.loaded;
-    let mut params = reel.batch.params(&loaded.arena);
-    if gpu.clock {
-        params.deadline_ticks = punchcutter_shape::abi::SHAPE_DEADLINE_TICKS;
-    }
-    let (width, height) = (args.width, args.height);
-    let pixels = u64::from(width) * u64::from(height);
-    let words = reel.batch.utf8_words();
-    let buffers = Buffers {
-        params: gpu.uniform("params", bytes_of(&params)),
-        requests: gpu.storage("requests", bytes_of_slice(reel.batch.requests()), 0),
-        ot: gpu.storage("ot", loaded.arena_bytes(), 0),
-        utf8: gpu.storage("utf8", words_bytes(&words), 0),
-        out_glyphs: gpu.storage(
-            "out-glyphs",
-            &[],
-            u64::from(reel.batch.glyph_capacity()) * size_of::<ShapedGlyph>() as u64,
-        ),
-        out_runs: gpu.storage(
-            "out-runs",
-            &[],
-            reel.batch.len() as u64 * size_of::<ShapeRun>() as u64,
-        ),
-        frame: gpu.uniform("frame", bytes_of(&Frame::default())),
-        blocks: gpu.storage("blocks", bytes_of_slice(&reel.blocks), 0),
-        runs: gpu.storage("runs", bytes_of_slice(&reel.runs), 0),
-        placed: gpu.storage("placed", &[], u64::from(reel.glyphs) * GLYPH_BYTES),
-        lines: gpu.storage("lines", &[], u64::from(reel.lines) * LINE_BYTES),
-        block_out: gpu.storage("block-out", &[], reel.blocks.len() as u64 * BLOCK_OUT_BYTES),
-        scene: gpu.storage("scene", &[], SCENE_BYTES),
-        image: gpu.storage("image", &[], pixels * 4),
-        curves: loaded
-            .curve_bytes()
-            .iter()
-            .enumerate()
-            .map(|(i, bytes)| gpu.storage(&format!("curves-{i}"), bytes, 0))
-            .collect(),
-    };
-    let groups = gpu.groups(&buffers);
-    let readback = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("reel-readback"),
-        size: pixels * 4,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-
-    // --- the frames --------------------------------------------------------
-
+    let gpu = Gpu::new(&instance(), args.discrete, None)?;
+    let mut renderer = Renderer::new(gpu, fonts, readme, args.width, args.height, false)?;
     let times: Vec<f32> = match &args.still {
         Some((t, _)) => vec![*t],
         None => {
@@ -952,97 +903,14 @@ fn main() -> Result<()> {
         }
     };
     let mut stdout = std::io::BufWriter::with_capacity(1 << 22, std::io::stdout().lock());
-    let mut rgba = vec![0u8; (pixels * 4) as usize];
+    let mut rgba = Vec::new();
     let started = Instant::now();
     for (i, &t) in times.iter().enumerate() {
-        let frame = direct(&cast, &mut reel, t, width, height);
-        gpu.queue.write_buffer(&buffers.frame, 0, bytes_of(&frame));
-        gpu.queue
-            .write_buffer(&buffers.blocks, 0, bytes_of_slice(&reel.blocks));
-        gpu.queue
-            .write_buffer(&buffers.requests, 0, bytes_of_slice(&reel.requests_at(t)));
-
-        let mut encoder = gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("reel"),
-            });
-        for (pass, workgroups) in [
-            (&passes.shape, reel.batch.workgroups()),
-            (&passes.typeset, (reel.blocks.len() as u32).div_ceil(64)),
-        ] {
-            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("reel-pass"),
-                timestamp_writes: None,
-            });
-            cpass.set_pipeline(pass);
-            cpass.set_bind_group(0, &groups.0, &[]);
-            cpass.set_bind_group(1, &groups.1, &[]);
-            cpass.dispatch_workgroups(workgroups, 1, 1);
-        }
-        gpu.queue.submit([encoder.finish()]);
-
-        // The draw pass, a strip at a time, each waited for before the next,
-        // so the desktop's own work gets the GPU in between.
-        for top in (0..height).step_by(STRIP as usize) {
-            let mut strip = frame;
-            strip.counts[3] = top;
-            gpu.queue.write_buffer(&buffers.frame, 0, bytes_of(&strip));
-            let mut encoder = gpu
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("reel-strip"),
-                });
-            {
-                let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("reel-strip"),
-                    timestamp_writes: None,
-                });
-                cpass.set_pipeline(&passes.frame);
-                cpass.set_bind_group(0, &groups.0, &[]);
-                cpass.set_bind_group(1, &groups.1, &[]);
-                cpass.dispatch_workgroups(
-                    width.div_ceil(8),
-                    STRIP.min(height - top).div_ceil(8),
-                    1,
-                );
-            }
-            gpu.queue.submit([encoder.finish()]);
-            gpu.device
-                .poll(wgpu::PollType::wait_indefinitely())
-                .map_err(|err| anyhow::anyhow!("a strip never finished: {err}"))?;
-        }
-
-        let mut encoder = gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("reel-copy"),
-            });
-        encoder.copy_buffer_to_buffer(&buffers.image, 0, &readback, 0, pixels * 4);
-        gpu.queue.submit([encoder.finish()]);
-
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        readback.slice(..).map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
-        gpu.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(|err| anyhow::anyhow!("the frame never finished: {err}"))?;
-        rx.recv()
-            .context("the map callback never fired")?
-            .context("the frame would not map")?;
-        {
-            let view = readback
-                .slice(..)
-                .get_mapped_range()
-                .map_err(|err| anyhow::anyhow!("the frame is unavailable: {err}"))?;
-            rgba.copy_from_slice(&view);
-        }
-        readback.unmap();
-
+        renderer.draw(t)?;
+        renderer.read(&mut rgba)?;
         match &args.still {
             Some((_, path)) => {
-                write_png(path, width, height, &rgba)?;
+                write_png(path, args.width, args.height, &rgba)?;
                 eprintln!("wrote {} (t = {t} s)", path.display());
             }
             None => stdout
@@ -1060,8 +928,366 @@ fn main() -> Result<()> {
         }
     }
     stdout.flush()?;
-    eprintln!("adapter used: {}", gpu.name);
+    eprintln!("adapter used: {}", renderer.gpu.name);
     Ok(())
+}
+
+/// The font, merged with the faces its fallback will need, and the README the
+/// page sets.
+fn load(args: &Args) -> Result<(Merged, String)> {
+    let (family, path) = face(args.font.clone())?;
+    let loaded = Loaded::load_path(&family, &path).map_err(anyhow::Error::msg)?;
+    eprintln!(
+        "font: {family} ({}), {} glyphs, {} curve buffers",
+        path.display(),
+        loaded.font_glyphs,
+        loaded.start()
+    );
+    let fonts = Merged::with_chain(loaded, chain(&path));
+    let readme_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../README.md");
+    let readme = std::fs::read_to_string(&readme_path)
+        .with_context(|| format!("could not read {}", readme_path.display()))?;
+    Ok((fonts, readme))
+}
+
+// ---------------------------------------------------------------------------
+// The renderer: one frame at a time, into the image buffer
+// ---------------------------------------------------------------------------
+
+/// Everything a frame is drawn from: the device, the three passes, their
+/// buffers and the script.
+struct Renderer {
+    gpu: Gpu,
+    passes: Passes,
+    buffers: Buffers,
+    groups: (wgpu::BindGroup, wgpu::BindGroup),
+    reel: Reel,
+    cast: Cast,
+    /// For setting the captions again when a window is resized.
+    #[cfg_attr(not(feature = "live"), allow(dead_code))]
+    readme: String,
+    width: u32,
+    height: u32,
+    /// Pixels per row of the image buffer: the width rounded up to 64, so that
+    /// a row is a whole number of the 256 bytes a texture copy wants.
+    pitch: u32,
+    /// Whether the image's bytes go out blue first, as a BGRA swapchain wants.
+    bgra: bool,
+    /// Coverage samples a pixel, 1 or 4.
+    samples: u32,
+    /// Whether every string has been shaped and every block set at least
+    /// once at this size. After that a frame does only the typed ones.
+    settled: bool,
+    /// For reading frames back to the CPU, made on the first read.
+    readback: Option<wgpu::Buffer>,
+}
+
+impl Renderer {
+    fn new(
+        gpu: Gpu,
+        mut fonts: Merged,
+        readme: String,
+        width: u32,
+        height: u32,
+        bgra: bool,
+    ) -> Result<Renderer> {
+        let mut reel = Reel::default();
+        let cast = script(&mut reel, &readme, height as f32);
+        let everything: String = reel.texts.concat();
+        let cover = fonts.cover(&everything);
+        for face in &cover.faces {
+            eprintln!(
+                "fallback: {} codepoints from {}",
+                face.codepoints, face.family
+            );
+        }
+        eprintln!(
+            "{} strings in {} blocks, {} glyph slots, {} line slots",
+            reel.runs.len(),
+            reel.blocks.len(),
+            reel.glyphs,
+            reel.lines
+        );
+
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/reel/reel.slang");
+        let started = Instant::now();
+        let program = punchcutter_slang::compile_program(
+            &source,
+            &["reel_shape", "reel_typeset", "reel_frame"],
+            &punchcutter_slang::Options::default(),
+        )
+        .map_err(|err| anyhow::anyhow!("{err}"))?;
+        for line in program.warnings.lines() {
+            eprintln!("slang: {line}");
+        }
+        eprintln!(
+            "shaders compiled in {:.0} ms",
+            started.elapsed().as_secs_f64() * 1e3
+        );
+        let passes = gpu.passes(&program)?;
+
+        let loaded = &fonts.loaded;
+        let mut params = reel.batch.params(&loaded.arena);
+        if gpu.clock {
+            params.deadline_ticks = punchcutter_shape::abi::SHAPE_DEADLINE_TICKS;
+        }
+        let pitch = width.next_multiple_of(64);
+        let words = reel.batch.utf8_words();
+        let buffers = Buffers {
+            params: gpu.uniform("params", bytes_of(&params)),
+            requests: gpu.storage("requests", bytes_of_slice(reel.batch.requests()), 0),
+            ot: gpu.storage("ot", loaded.arena_bytes(), 0),
+            utf8: gpu.storage("utf8", words_bytes(&words), 0),
+            out_glyphs: gpu.storage(
+                "out-glyphs",
+                &[],
+                u64::from(reel.batch.glyph_capacity()) * size_of::<ShapedGlyph>() as u64,
+            ),
+            out_runs: gpu.storage(
+                "out-runs",
+                &[],
+                reel.batch.len() as u64 * size_of::<ShapeRun>() as u64,
+            ),
+            frame: gpu.uniform("frame", bytes_of(&Frame::default())),
+            blocks: gpu.storage("blocks", bytes_of_slice(&reel.blocks), 0),
+            runs: gpu.storage("runs", bytes_of_slice(&reel.runs), 0),
+            placed: gpu.storage("placed", &[], u64::from(reel.glyphs) * GLYPH_BYTES),
+            lines: gpu.storage("lines", &[], u64::from(reel.lines) * LINE_BYTES),
+            block_out: gpu.storage("block-out", &[], reel.blocks.len() as u64 * BLOCK_OUT_BYTES),
+            scene: gpu.storage("scene", &[], SCENE_BYTES),
+            image: gpu.storage("image", &[], u64::from(pitch) * u64::from(height) * 4),
+            curves: loaded
+                .curve_bytes()
+                .iter()
+                .enumerate()
+                .map(|(i, bytes)| gpu.storage(&format!("curves-{i}"), bytes, 0))
+                .collect(),
+        };
+        let groups = gpu.groups(&buffers);
+        Ok(Renderer {
+            gpu,
+            passes,
+            buffers,
+            groups,
+            reel,
+            cast,
+            readme,
+            width,
+            height,
+            pitch,
+            bgra,
+            samples: 4,
+            settled: false,
+            readback: None,
+        })
+    }
+
+    /// A new size: a new image buffer, and the captions placed again for it.
+    #[cfg(feature = "live")]
+    fn resize(&mut self, width: u32, height: u32) {
+        self.width = width;
+        self.height = height;
+        self.pitch = width.next_multiple_of(64);
+        self.buffers.image =
+            self.gpu
+                .storage("image", &[], u64::from(self.pitch) * u64::from(height) * 4);
+        self.groups = self.gpu.groups(&self.buffers);
+        self.readback = None;
+        self.settled = false;
+        // Only the blocks depend on the size; the strings and the slots they
+        // were given are the same.
+        let mut fresh = Reel::default();
+        self.cast = script(&mut fresh, &self.readme, height as f32);
+        self.reel.blocks = fresh.blocks;
+    }
+
+    /// Shape, typeset and draw the frame at `t` into the image buffer.
+    fn draw(&mut self, t: f32) -> Result<()> {
+        let (gpu, reel) = (&self.gpu, &mut self.reel);
+        let mut frame = direct(&self.cast, reel, t, self.width, self.height);
+        frame.out = [self.pitch, u32::from(self.bgra), self.samples, 0];
+        // What changes from frame to frame is the typing: those strings are
+        // shaped again and those blocks set again, and nothing else is, once
+        // everything has been done once.
+        let (runs, blocks) = reel.typing();
+        let partial = self.settled && runs.len() <= 16 && blocks.len() <= 16;
+        if partial {
+            frame.partial = [runs.len() as u32, blocks.len() as u32, 0, 0];
+            for (i, &r) in runs.iter().enumerate() {
+                frame.run_list[i / 4][i % 4] = r;
+            }
+            for (i, &b) in blocks.iter().enumerate() {
+                frame.block_list[i / 4][i % 4] = b;
+            }
+        }
+        self.settled = true;
+        let shape_threads = if partial {
+            runs.len() as u32
+        } else {
+            reel.batch.len() as u32
+        };
+        let typeset_threads = if partial {
+            blocks.len() as u32
+        } else {
+            reel.blocks.len() as u32
+        };
+        gpu.queue
+            .write_buffer(&self.buffers.frame, 0, bytes_of(&frame));
+        gpu.queue
+            .write_buffer(&self.buffers.blocks, 0, bytes_of_slice(&reel.blocks));
+        gpu.queue.write_buffer(
+            &self.buffers.requests,
+            0,
+            bytes_of_slice(&reel.requests_at(t)),
+        );
+
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("reel"),
+            });
+        let groups = &self.groups;
+        let dispatch = |encoder: &mut wgpu::CommandEncoder, pass, x, y| {
+            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("reel-pass"),
+                timestamp_writes: None,
+            });
+            cpass.set_pipeline(pass);
+            cpass.set_bind_group(0, &groups.0, &[]);
+            cpass.set_bind_group(1, &groups.1, &[]);
+            cpass.dispatch_workgroups(x, y, 1);
+        };
+        dispatch(
+            &mut encoder,
+            &self.passes.shape,
+            shape_threads.div_ceil(64).max(1),
+            1,
+        );
+        dispatch(
+            &mut encoder,
+            &self.passes.typeset,
+            typeset_threads.div_ceil(64).max(1),
+            1,
+        );
+        if gpu.discrete {
+            // A GPU the desktop is not drawing on takes the whole frame in
+            // one dispatch.
+            dispatch(
+                &mut encoder,
+                &self.passes.frame,
+                self.width.div_ceil(8),
+                self.height.div_ceil(8),
+            );
+            gpu.queue.submit([encoder.finish()]);
+            return Ok(());
+        }
+        gpu.queue.submit([encoder.finish()]);
+
+        // The draw pass, a strip at a time, each waited for before the next,
+        // so the desktop's own work gets the GPU in between.
+        for top in (0..self.height).step_by(STRIP as usize) {
+            let mut strip = frame;
+            strip.counts[3] = top;
+            gpu.queue
+                .write_buffer(&self.buffers.frame, 0, bytes_of(&strip));
+            let mut encoder = gpu
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("reel-strip"),
+                });
+            dispatch(
+                &mut encoder,
+                &self.passes.frame,
+                self.width.div_ceil(8),
+                STRIP.min(self.height - top).div_ceil(8),
+            );
+            gpu.queue.submit([encoder.finish()]);
+            gpu.device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .map_err(|err| anyhow::anyhow!("a strip never finished: {err}"))?;
+        }
+        Ok(())
+    }
+
+    /// The last frame drawn, as tightly packed RGBA rows.
+    fn read(&mut self, rgba: &mut Vec<u8>) -> Result<()> {
+        let bytes = u64::from(self.pitch) * u64::from(self.height) * 4;
+        let gpu = &self.gpu;
+        let readback = self.readback.get_or_insert_with(|| {
+            gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("reel-readback"),
+                size: bytes,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        });
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("reel-copy"),
+            });
+        encoder.copy_buffer_to_buffer(&self.buffers.image, 0, readback, 0, bytes);
+        gpu.queue.submit([encoder.finish()]);
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        readback.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        gpu.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|err| anyhow::anyhow!("the frame never finished: {err}"))?;
+        rx.recv()
+            .context("the map callback never fired")?
+            .context("the frame would not map")?;
+        {
+            let view = readback
+                .slice(..)
+                .get_mapped_range()
+                .map_err(|err| anyhow::anyhow!("the frame is unavailable: {err}"))?;
+            let row = self.width as usize * 4;
+            let stride = self.pitch as usize * 4;
+            rgba.clear();
+            for y in 0..self.height as usize {
+                rgba.extend_from_slice(&view[y * stride..y * stride + row]);
+            }
+        }
+        readback.unmap();
+        Ok(())
+    }
+
+    /// Copy the last frame drawn into `texture`, a swapchain image of the
+    /// same size.
+    #[cfg(feature = "live")]
+    fn present(&self, texture: &wgpu::Texture) {
+        let mut encoder = self
+            .gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("reel-present"),
+            });
+        encoder.copy_buffer_to_texture(
+            wgpu::TexelCopyBufferInfo {
+                buffer: &self.buffers.image,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(self.pitch * 4),
+                    rows_per_image: Some(self.height),
+                },
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.gpu.queue.submit([encoder.finish()]);
+    }
 }
 
 fn words_bytes(words: &[u32]) -> &[u8] {
@@ -1115,6 +1341,9 @@ fn integrated_icd() -> Option<String> {
 }
 
 struct Gpu {
+    /// For the window's surface to be configured against.
+    #[cfg_attr(not(feature = "live"), allow(dead_code))]
+    adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
     /// Set 0, every pass's: the shaper's six bindings and the reel's eight.
@@ -1122,7 +1351,17 @@ struct Gpu {
     /// Set 1: `text.slang`'s four curve buffers.
     font_layout: wgpu::BindGroupLayout,
     clock: bool,
+    discrete: bool,
     name: String,
+}
+
+/// A Vulkan instance. Vulkan wants no display handle up front; a window's
+/// surface brings its own.
+fn instance() -> wgpu::Instance {
+    wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::VULKAN,
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
+    })
 }
 
 struct Passes {
@@ -1169,16 +1408,21 @@ const SET0: [(bool, bool); 14] = [
 ];
 
 impl Gpu {
-    fn new(discrete: bool) -> Result<Gpu> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN,
-            ..wgpu::InstanceDescriptor::new_without_display_handle()
-        });
+    /// The adapter asked for, and one that can present to `surface` when
+    /// there is a window.
+    fn new(
+        instance: &wgpu::Instance,
+        discrete: bool,
+        surface: Option<&wgpu::Surface<'_>>,
+    ) -> Result<Gpu> {
         let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::VULKAN));
         let adapter = adapters
             .into_iter()
             .find(|adapter| {
                 let info = adapter.get_info();
+                if surface.is_some_and(|surface| !adapter.is_surface_supported(surface)) {
+                    return false;
+                }
                 if discrete {
                     return info.device_type == wgpu::DeviceType::DiscreteGpu;
                 }
@@ -1258,11 +1502,13 @@ impl Gpu {
             entries: &set1,
         });
         Ok(Gpu {
+            adapter,
             device,
             queue,
             layout,
             font_layout,
             clock: clock == punchcutter_core::gpu::ShaderClock::Device,
+            discrete,
             name: info.name,
         })
     }

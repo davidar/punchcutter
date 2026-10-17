@@ -204,8 +204,17 @@ lens magnifies it per pixel; a board of ligatures, kerning, small capitals,
 old-style figures, fractions, mark attachment and a fallback face types itself
 out, shaped again every frame. Each frame is three compute passes
 (`fonts/examples/reel/reel.slang`: shape, typeset, draw) and the CPU decides
-only the clock and what the camera frames. The frames go to stdout as raw
-RGBA; `--still <seconds> <file.png>` writes one instead. It sets EB Garamond
+only the clock and what the camera frames. After the first frame only the
+strings being typed are shaped and set again. The frames go to stdout as raw
+RGBA; `--still <seconds> <file.png>` writes one instead, and `--live` plays the
+reel in a window, in real time and on a loop, each frame copied from the
+image buffer to the swapchain on the GPU:
+
+```sh
+cargo run -p punchcutter-fonts --features live --example reel -- --live --adapter discrete
+```
+
+The window is the `live` feature, so the tests never build a window system. It sets EB Garamond
 when fontconfig has it (else Noto Serif, or `--font <path>`), and picks its
 adapter as the render example does unless `--adapter discrete` asks for a
 discrete GPU, which is the better place for a long render: it leaves the GPU

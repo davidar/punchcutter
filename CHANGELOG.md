@@ -51,4 +51,5 @@ build script depends on it for the ABI alone.
 **The demo reel** (`punchcutter-fonts`, `examples/reel`). A video rendered
 entirely by the engine: shaping, line breaking, justification, column
 balancing, coverage and compositing in three compute passes a frame, the
-frames written to stdout as raw RGBA for an encoder.
+frames written to stdout as raw RGBA for an encoder, or, with the `live`
+feature, played in a window in real time.

@@ -194,6 +194,24 @@ One thread shapes one string, in workgroups of `SHAPE_WORKGROUP` (64).
 `punchcutter_shape::Batch` packs the strings, the requests and the feature
 pool, and gives each string `min(bytes * 4 + 8, MAX_RUN_GLYPHS)` glyph slots.
 
+### What a dispatch costs
+
+A dispatch takes as long as its **longest string**, because that string is one
+thread walking its lookups alone; a hundred short strings cost about what one
+long one does. So shape a string when it changes, not every frame: a run's
+output stays valid in the output buffers until the string, its size or the
+font changes. A host that draws every frame keeps the runs it already has and
+dispatches only the requests that changed, which it can name through a list of
+indices of its own rather than by rebuilding the batch. In the demo reel
+(`fonts/examples/reel`), shaping all 107 of its strings took 35 ms a frame on
+a laptop RTX 4060; shaping only the ones being typed brought the whole frame,
+shaping, typesetting and drawing, under 8 ms. The same holds for anything one
+thread does per string or per paragraph, such as breaking lines.
+
+A long dispatch has a second cost on an integrated GPU: the desktop draws with
+that GPU too, and cannot while the dispatch runs, so the pointer stutters. A
+host doing heavy work there submits it in pieces of a few milliseconds each.
+
 **`ShapeFont`**, 16 bytes: `upem`, `glyph_count` (records in the merged space,
 the bound on every id the shader writes), and the primary's `hhea`
 `ascender` and `descender` (signed, design units).

@@ -135,7 +135,14 @@ struct ReelFrame
     float4 probe; // xy the probe within the ink box, z bands
     float4 look; // x brightness, y wave height (em), z wave length (em), w wave phase
     uint4 counts; // x blocks, y width, z height, w the strip's first row
+    uint4 out; // x pixels per row of `image`; y nonzero to write blue first; z samples, 1 or 4
+    uint4 partial; // x strings in `run_list`, or EVERY; y blocks in `block_list`, or EVERY
+    uint4 run_list[4]; // the strings to shape again this frame
+    uint4 block_list[4]; // the blocks to set again this frame
 };
+
+/// `ReelFrame.partial`: shape, or set, all of them.
+static const uint EVERY = 0xFFFFFFFFu;
 
 [[vk::binding(0, 0)]] ConstantBuffer<ShapeParams> params;
 [[vk::binding(1, 0)]] StructuredBuffer<ShapeRequest> requests;
@@ -160,7 +167,18 @@ struct ReelFrame
 [numthreads(64, 1, 1)]
 void reel_shape(uint3 gid: SV_DispatchThreadID)
 {
-    if (gid.x >= params.request_count)
+    // Every string on the first frame; after it, only those that change,
+    // which is the ones being typed.
+    uint index = gid.x;
+    if (frame.partial.x != EVERY)
+    {
+        if (gid.x >= frame.partial.x)
+        {
+            return;
+        }
+        index = frame.run_list[gid.x >> 2u][gid.x & 3u];
+    }
+    if (index >= params.request_count)
     {
         return;
     }
@@ -170,7 +188,7 @@ void reel_shape(uint3 gid: SV_DispatchThreadID)
     t.utf8_alt0 = utf8;
     t.utf8_alt1 = utf8;
     t.source = 0u;
-    out_runs[gid.x] = shapeRun(t, params, requests[gid.x], out_glyphs, params.glyph_capacity);
+    out_runs[index] = shapeRun(t, params, requests[index], out_glyphs, params.glyph_capacity);
 }
 
 // ---------------------------------------------------------------------------
@@ -330,6 +348,14 @@ uint flow(ReelBlock b, uint n, uint rows, bool commit, inout float4 box)
 void reel_typeset(uint3 tid: SV_DispatchThreadID)
 {
     uint bi = tid.x;
+    if (frame.partial.y != EVERY)
+    {
+        if (tid.x >= frame.partial.y)
+        {
+            return;
+        }
+        bi = frame.block_list[tid.x >> 2u][tid.x & 3u];
+    }
     if (bi >= frame.counts.x)
     {
         return;
@@ -547,8 +573,8 @@ uint firstRightOf(ReelLine line, float x)
 
 /// One sample of every world block, or of every screen one: `p` is the world
 /// point and `ps` the screen point; `pxPerUnit` is pixels per world unit at
-/// this point.
-float3 shadeSample(float3 colour, float2 p, float2 ps, float2 pxPerUnit, float t, bool screenPass)
+/// this point, and `footprint` how many samples span a pixel along each axis.
+float3 shadeSample(float3 colour, float2 p, float2 ps, float2 pxPerUnit, float footprint, float t, bool screenPass)
 {
     ReelScene sc = scene[0];
     for (uint bi = 0u; bi < frame.counts.x; ++bi)
@@ -576,7 +602,7 @@ float3 shadeSample(float3 colour, float2 p, float2 ps, float2 pxPerUnit, float t
             float u = (q.x - b.origin.x) / b.size;
             q.y -= frame.look.y * b.size * sin(u / frame.look.z * 6.2831853 + frame.look.w);
         }
-        float2 pxPerEm = b.size * unitPx * 2.0; // a sample is half a pixel wide
+        float2 pxPerEm = b.size * unitPx * footprint;
 
         // The lines a sample can touch: those whose ascender or descender
         // reaches it, in the column it falls in.
@@ -877,9 +903,11 @@ float3 lensGlass(float3 colour, float2 s)
     return colour;
 }
 
-uint pack(float3 c)
+/// Eight bits a channel, red first, or blue first for a BGRA swapchain.
+uint pack(float3 c, bool bgra)
 {
     uint3 v = uint3(round(saturate(c) * 255.0));
+    v = bgra ? v.zyx : v;
     return v.x | (v.y << 8u) | (v.z << 16u) | (0xFFu << 24u);
 }
 
@@ -911,16 +939,19 @@ void reel_frame(uint3 dispatched: SV_DispatchThreadID)
     float2 uv = s / size;
     float3 bg = INK_BG * (1.0 + 0.55 * exp(-4.0 * dot(uv - float2(0.5, 0.42), uv - float2(0.5, 0.42))));
 
-    // Four samples on a rotated grid.
+    // Four samples on a rotated grid, each half a pixel across; or one, a
+    // whole pixel across, where pixels are small enough not to need more.
     static const float2 OFFSETS[4] = { float2(-0.125, -0.375), float2(0.375, -0.125),
                                        float2(0.125, 0.375), float2(-0.375, 0.125) };
+    uint samples = frame.out.z == 1u ? 1u : 4u;
+    float footprint = samples == 1u ? 1.0 : 2.0;
     float3 sum = float3(0.0, 0.0, 0.0);
-    for (uint i = 0u; i < 4u; ++i)
+    for (uint i = 0u; i < samples; ++i)
     {
-        float2 ss = s + OFFSETS[i];
-        sum += shadeSample(bg, toWorld(ss, cam), ss, pxPerUnit, t, false);
+        float2 ss = samples == 1u ? s : s + OFFSETS[i];
+        sum += shadeSample(bg, toWorld(ss, cam), ss, pxPerUnit, footprint, t, false);
     }
-    float3 colour = sum * 0.25;
+    float3 colour = sum / float(samples);
 
     if (frame.hero.x > 0.0 || frame.hero.w > 0.0 || frame.probe.z > 0.0)
     {
@@ -932,12 +963,12 @@ void reel_frame(uint3 dispatched: SV_DispatchThreadID)
     // one is up.
     colour *= 1.0 - frame.cam.y * 0.7 * smoothstep(0.68, 0.9, uv.y) * smoothstep(0.75, 0.0, uv.x);
     sum = float3(0.0, 0.0, 0.0);
-    for (uint i = 0u; i < 4u; ++i)
+    for (uint i = 0u; i < samples; ++i)
     {
-        float2 ss = s + OFFSETS[i];
-        sum += shadeSample(colour, ss, ss, float2(1.0, 1.0), t, true);
+        float2 ss = samples == 1u ? s : s + OFFSETS[i];
+        sum += shadeSample(colour, ss, ss, float2(1.0, 1.0), footprint, t, true);
     }
-    colour = sum * 0.25;
+    colour = sum / float(samples);
 
     float2 v = uv - 0.5;
     colour *= 1.0 - 0.45 * pow(saturate(length(v * float2(1.0, size.y / size.x)) * 1.35), 2.6);
@@ -947,5 +978,5 @@ void reel_frame(uint3 dispatched: SV_DispatchThreadID)
     uint bx = tid.x & 1u;
     uint by = tid.y & 1u;
     float dither = (float((bx ^ by) * 2u + by) / 4.0 - 0.375) / 255.0;
-    image[tid.y * width + tid.x] = pack(colour + dither);
+    image[tid.y * frame.out.x + tid.x] = pack(colour + dither, frame.out.y != 0u);
 }
