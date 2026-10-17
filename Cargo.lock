@@ -940,10 +940,15 @@ dependencies = [
 name = "punchcutter-fonts"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "png",
+ "pollster",
  "punchcutter-core",
  "punchcutter-shape",
+ "punchcutter-slang",
  "punchcutter-text",
  "tracing",
+ "wgpu",
 ]
 
 [[package]]

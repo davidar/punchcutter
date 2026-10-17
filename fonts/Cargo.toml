@@ -16,3 +16,14 @@ punchcutter-shape = { path = "../shape" }
 punchcutter-core = { path = "../core" }
 # What a load or a cover could not do is reported here rather than printed.
 tracing = "0.1"
+
+[dev-dependencies]
+# The demo reel (`examples/reel`): headless wgpu (`gpu`), its shader compiled
+# in process at startup, and a PNG for a single frame. The same versions the
+# other harnesses take.
+anyhow = "1"
+png = "0.18.1"
+pollster = "0.4"
+punchcutter-core = { path = "../core", features = ["gpu"] }
+punchcutter-slang = { path = "../slang" }
+wgpu = "30"

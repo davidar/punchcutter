@@ -47,3 +47,8 @@ crate is the types and the modules alone.
 declare-once macros that generate `slang/modules/shape_abi.slang`, and wgpu
 helpers including a device opened with `VK_KHR_shader_clock`. Std-only, so a
 build script depends on it for the ABI alone.
+
+**The demo reel** (`punchcutter-fonts`, `examples/reel`). A video rendered
+entirely by the engine: shaping, line breaking, justification, column
+balancing, coverage and compositing in three compute passes a frame, the
+frames written to stdout as raw RGBA for an encoder.

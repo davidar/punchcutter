@@ -188,6 +188,30 @@ bounded by `MAX_RUN_GLYPHS` or `MAX_OPS`. The 4
 mismatches are hostile-font cases newer than harfrust 0.12.0
 (docs/roadmap.md, *Conformance*).
 
+## The demo reel
+
+```sh
+cargo run -p punchcutter-fonts --example reel | \
+    ffmpeg -f rawvideo -pix_fmt rgba -s 1280x720 -r 60 -i - \
+    -c:v libx264 -pix_fmt yuv420p -crf 18 reel.mp4
+```
+
+Half a minute of video in which every pixel is the engine's. An ampersand's
+quadratic curves draw themselves over Slug's bands while a probe casts the two
+rays the coverage walk casts; the camera pulls back to this README, shaped,
+broken into lines, justified and balanced into three columns on the GPU; a
+lens magnifies it per pixel; a board of ligatures, kerning, small capitals,
+old-style figures, fractions, mark attachment and a fallback face types itself
+out, shaped again every frame. Each frame is three compute passes
+(`fonts/examples/reel/reel.slang`: shape, typeset, draw) and the CPU decides
+only the clock and what the camera frames. The frames go to stdout as raw
+RGBA; `--still <seconds> <file.png>` writes one instead. It sets EB Garamond
+when fontconfig has it (else Noto Serif, or `--font <path>`), and picks its
+adapter as the render example does unless `--adapter discrete` asks for a
+discrete GPU, which is the better place for a long render: it leaves the GPU
+the desktop draws on alone. On the integrated GPU the draw pass goes a strip
+of rows per submit, so the desktop still gets a turn between them.
+
 ## Not done yet
 
 Colour fonts, Unicode itemisation and bidi, the normaliser, complex-script
