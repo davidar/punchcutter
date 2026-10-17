@@ -1183,7 +1183,7 @@ dependencies = [
 [[package]]
 name = "shader-slang"
 version = "0.1.0"
-source = "git+https://github.com/davidar/slang-rs?rev=3b3d2da01ea1aa2950dfca6c08a65b108b111750#3b3d2da01ea1aa2950dfca6c08a65b108b111750"
+source = "git+https://github.com/davidar/slang-rs?rev=187639dca673b0fcec6d4e799286aea2ebf0234a#187639dca673b0fcec6d4e799286aea2ebf0234a"
 dependencies = [
  "libloading",
  "shader-slang-sys",
@@ -1192,7 +1192,7 @@ dependencies = [
 [[package]]
 name = "shader-slang-sys"
 version = "0.1.0"
-source = "git+https://github.com/davidar/slang-rs?rev=3b3d2da01ea1aa2950dfca6c08a65b108b111750#3b3d2da01ea1aa2950dfca6c08a65b108b111750"
+source = "git+https://github.com/davidar/slang-rs?rev=187639dca673b0fcec6d4e799286aea2ebf0234a#187639dca673b0fcec6d4e799286aea2ebf0234a"
 dependencies = [
  "flate2",
  "libloading",

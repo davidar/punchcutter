@@ -24,8 +24,8 @@
 //! [`modules`] holds `text.slang`, `shape.slang` and the two `shape.slang`
 //! imports as strings compiled into this crate. A shader compiled here says
 //! `import text;` or `import shape;` and nothing else: the modules are on the
-//! search path of every compile, written out once per machine by
-//! [`slang_dir`].
+//! search path of every compile, served from memory. [`slang_dir`] writes
+//! them out for anything else that wants them on disk.
 //!
 //! # What a compile produces
 //!
@@ -57,8 +57,8 @@ pub use compiler::{compile, compile_program, reflect, validate_spirv, version};
 /// imports `ot` and `shape_abi`. The four travel inside any binary built on
 /// this crate, so the engine a program was built against is the engine it
 /// runs with, and no checkout has to be where it was when the program was
-/// built. Every compile through this crate finds them; [`slang_dir`] is where
-/// they are written for anything else that wants to.
+/// built. Every compile through this crate finds them in memory;
+/// [`slang_dir`] is where they are written for anything else that wants to.
 pub mod modules {
     use std::io;
     use std::path::Path;
@@ -113,9 +113,9 @@ pub mod modules {
     }
 }
 
-/// A directory holding the engine's Slang modules ([`modules`]): the last
-/// entry on the search path of every compile through this crate, and a
-/// directory to hand to anything else that compiles a shader importing them.
+/// A directory holding the engine's Slang modules ([`modules`]), for
+/// anything other than this crate's compiler that wants them on disk: a
+/// different compiler, an editor's language server, a cache key over files.
 ///
 /// The modules are written from the copies compiled into this crate, so the
 /// directory exists wherever the binary runs. It is

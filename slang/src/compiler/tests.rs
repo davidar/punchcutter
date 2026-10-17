@@ -47,7 +47,8 @@ fn the_demos_compile_with_nothing_to_report() {
     }
 }
 
-/// A shader that sits nowhere near the modules still imports them.
+/// A shader that sits nowhere near the modules still imports them: they are
+/// served from the copies compiled in, from memory.
 #[test]
 fn a_shader_elsewhere_imports_the_engine() {
     let dir = scratch("elsewhere");

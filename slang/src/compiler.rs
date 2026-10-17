@@ -9,9 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use shader_slang as slang;
 use slang::reflection::{Shader, TypeLayout};
 
-use crate::{
-    Binding, BindingKind, Entry, Options, Program, Reflection, SlangError, modules, slang_dir,
-};
+use crate::{Binding, BindingKind, Entry, Options, Program, Reflection, SlangError, modules};
 
 /// Compile one entry point of a Slang module to a SPIR-V binary.
 ///
@@ -62,7 +60,7 @@ pub fn version() -> String {
     format!(
         "punchcutter-slang {} / Slang {} / modules {:016x}",
         env!("CARGO_PKG_VERSION"),
-        slang::embedded::version(),
+        slang::SLANG_VERSION,
         modules::hash()
     )
 }
@@ -71,9 +69,9 @@ pub fn version() -> String {
 ///
 /// Creating one opens the embedded library and loads Slang's core module,
 /// which is the one expensive step; a session for a compile is cheap beside
-/// it. Per thread rather than shared because Slang's global session is not
-/// documented as safe to use from two threads at once, and a compile has no
-/// lock to take this way.
+/// it. Per thread rather than shared: Slang allows one global session on
+/// many threads only under a lock, and distinct global sessions without
+/// one, so two threads compiling at once do not wait on each other.
 fn with_global<T>(
     f: impl FnOnce(&slang::GlobalSession) -> Result<T, SlangError>,
 ) -> Result<T, SlangError> {
@@ -173,8 +171,14 @@ fn build(
     })
 }
 
+/// The search path under which the engine's modules are served from memory:
+/// the last on every session's list, so a caller's own file of the same
+/// name wins, and never a real directory.
+const ENGINE: &str = "punchcutter-modules";
+
 /// A session with the fixed settings and the search path: the source's own
-/// directory, the caller's, then the engine's modules.
+/// directory, the caller's, then the engine's modules, which come from the
+/// copies compiled into this crate rather than from disk.
 fn session(
     global: &slang::GlobalSession,
     source: &Path,
@@ -212,11 +216,25 @@ fn session(
         .filter(|parent| !parent.as_os_str().is_empty())
         .into_iter()
         .chain(options.includes.iter().copied())
-        .chain([slang_dir()])
+        .chain([Path::new(ENGINE)])
         .collect();
+    // Slang asks for `<search path>/<name>`; under the engine's pseudo
+    // directory the answer is the compiled-in text, everywhere else the
+    // platform's file.
+    let file_system = slang::FileSystem::new(|path: &str, default: &slang::DefaultFileSystem| {
+        let served = path
+            .strip_prefix(ENGINE)
+            .and_then(|rest| rest.strip_prefix(['/', '\\']))
+            .and_then(|name| modules::ALL.iter().find(|(file, _)| *file == name));
+        match served {
+            Some((_, text)) => Ok(text.as_bytes().to_vec()),
+            None => default.load(path),
+        }
+    });
     let desc = slang::SessionDesc::default()
         .targets(&targets)
         .search_paths(search)
+        .file_system(&file_system)
         .options(&session_options);
     global
         .try_create_session(&desc)

@@ -11,7 +11,7 @@ rust-version.workspace = true
 # official Slang release inside the binary (downloaded and checked against its
 # SHA-256 when the crate builds), so a program built on this crate compiles
 # shaders on a machine with nothing installed and no variable set.
-shader-slang = { git = "https://github.com/davidar/slang-rs", rev = "3b3d2da01ea1aa2950dfca6c08a65b108b111750", optional = true }
+shader-slang = { git = "https://github.com/davidar/slang-rs", rev = "187639dca673b0fcec6d4e799286aea2ebf0234a", optional = true }
 # A `Reflection` as bytes, so a build script can bake it beside the SPIR-V
 # and a process starting on baked modules has its bindings and its strings
 # without compiling.
