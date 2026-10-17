@@ -18,6 +18,12 @@ pointer.
   us: no personal names, machine names or dates as narrative in comments or
   documents, no history, no private labels. Cite documents by file and section
   name, never by number. Before a push: `docs/check-links.sh` clean.
+- **Plain voice.** Documentation is instructions, not essays. Short
+  declarative sentences; "you" is fine; a list or a command beats a paragraph
+  that describes one. Avoid aphorisms and antitheses ("X, never Y"), colon
+  chains, trailing flourishes ("..., unread"), personified hardware ("the
+  desktop gets a turn") and the possessive "its own" as decoration. Say what
+  something does and how to run it.
 - **The engine knows nothing about its consumer.** No module or crate refers
   to what draws the text.
 - **GPU first.** The CPU keeps I/O; shaping, coverage and every table walk are
