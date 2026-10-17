@@ -211,6 +211,7 @@ thread does per string or per paragraph, such as breaking lines.
 A long dispatch has a second cost on an integrated GPU: the desktop draws with
 that GPU too, and cannot while the dispatch runs, so the pointer stutters. A
 host doing heavy work there submits it in pieces of a few milliseconds each.
+docs/performance.md has the rest of what keeps a frame short.
 
 **`ShapeFont`**, 16 bytes: `upem`, `glyph_count` (records in the merged space,
 the bound on every id the shader writes), and the primary's `hhea`

@@ -7,7 +7,8 @@ harnesses. The modules live in `slang/modules/`, inside the `punchcutter-slang`
 crate that compiles them in process.
 
 **References** (living, in `docs/`): arena.md the byte-level contract between
-the crates and the Slang modules; roadmap.md what is not built yet.
+the crates and the Slang modules; performance.md what keeps a frame short;
+roadmap.md what is not built yet.
 CONTRIBUTING.md has the rules. `docs/check-links.sh` checks every `docs/….md`
 pointer.
 
