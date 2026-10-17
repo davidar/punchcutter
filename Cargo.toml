@@ -4,9 +4,10 @@
 # finding and merging fonts.
 members = ["core", "fonts", "shape", "slang", "text"]
 # The edition-2024 default, stated because it matters here: `text` depends on
-# `punchcutter-core` without features from its build script and with `gpu` from
-# its tests and examples, and only resolver 2 or later keeps a build script's
-# graph from pulling in wgpu.
+# `punchcutter-core` without features from its library and with `gpu` from its
+# tests and examples, and takes `punchcutter-slang` from its build script
+# alone; only resolver 2 or later keeps a build script's graph and a library's
+# features apart.
 resolver = "3"
 
 # Every member inherits these, so the licence, the edition and the oldest

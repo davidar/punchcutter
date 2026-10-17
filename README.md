@@ -106,7 +106,9 @@ hosts for each module.
   official release (2026.14.1) inside the binary, through the `shader-slang`
   crate, whose build downloads the release archive once and checks it against
   a pinned SHA-256 (`SLANG_RELEASE_ARCHIVE=<path>` builds from a prefetched
-  copy, offline). `spirv-val` from SPIRV-Tools is used when present.
+  copy, offline). A binary built this way carries Slang's libraries, under
+  Slang's own licence (NOTICE, *Slang*). `spirv-val` from SPIRV-Tools is used
+  when present.
 - **Rust** 1.88 or later. `Cargo.lock` is committed; build with `--locked`.
 - **Vulkan** with wgpu's `PASSTHROUGH_SHADERS` for the examples and the GPU
   tests. The shaper's SPIR-V uses `VK_KHR_shader_clock`, which

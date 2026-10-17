@@ -4,7 +4,7 @@ material from, or written from, the following third-party works.
 Slug
 ----
 
-The glyph coverage in slang/text.slang (`textRootCode`,
+The glyph coverage in slang/modules/text.slang (`textRootCode`,
 `textSolveHoriz`, `textSolveVert`, `textCombine` and the two band loops in
 `textCoverageAniso`) is a port of the Slug reference pixel shader by Eric
 Lengyel, published at https://github.com/EricLengyel/Slug. The reference
@@ -23,10 +23,22 @@ announced at https://terathon.com/blog/decade-slug.html.
 The band preprocessing in text/src/bands.rs is this project's own, written
 from the paper.
 
+Slang
+-----
+
+A binary built with punchcutter-slang's `compiler` feature (the default)
+carries the Slang compiler library and its SPIR-V tools module, taken
+unmodified from the official Slang release named in slang/Cargo.toml
+(through the `shader-slang` crate). Slang is published at
+https://github.com/shader-slang/slang under the Apache License 2.0 with the
+LLVM exception; the release's LICENSE and LICENSES/ list the further terms of
+the components it bundles. A program that redistributes such a binary
+redistributes those libraries, and their notices travel with it.
+
 Unicode
 -------
 
-slang/shape.slang writes out the ranges of the Unicode
+slang/modules/shape.slang writes out the ranges of the Unicode
 Default_Ignorable_Code_Point property. The Unicode Character Database is
 covered by the Unicode License v3:
 
