@@ -127,14 +127,17 @@
 //     storage) and not a struct passed `inout`, because `inout` is copy-in
 //     copy-out and the glyph buffer is 8 KiB: five times the SPIR-V;
 //   * `applySubtables` has **one call site**, and so does `applyLookupPass`,
-//     and the three contextual formats share one matching body — every extra
-//     call site is another copy of all twelve subtable walkers;
+//     and inside `applySubtables` each walker is called once: the two
+//     contextual types and their three formats share one matching body,
+//     reached from one place whether the table is GSUB or GPOS. Every extra
+//     call site is another copy of a walker, its matchers and both iterators;
 //   * `otByte` is branchless, because it is inlined about three thousand times
 //     and a bounds `if` in it would be three thousand basic blocks.
 //
-// The result is under 2 MB of SPIR-V for one entry point that shapes, and
-// about two seconds of Slang. Both are large, both are measured, and neither
-// is an accident.
+// The result is about 1.2 MB of SPIR-V for one entry point that shapes, and
+// about three seconds of Slang. Both are large, both are measured, and neither
+// is an accident. The driver's compile of that module is what a cold start
+// waits for, and it scales with the copies rather than with the bytes.
 //
 // ---------------------------------------------------------------------------
 // PARALLELISM
@@ -1866,18 +1869,25 @@ void pushFrame(uint records, uint record_count, uint count, uint match_end)
     fr_pushed = true;
 }
 
-/// A Context (GSUB 5 / GPOS 7) subtable at the cursor.
+/// A Context (GSUB 5 / GPOS 7) or ChainContext (GSUB 6 / GPOS 8) subtable at
+/// the cursor.
 ///
-/// The three formats share one body. Format 1 states its rules as glyph ids and
-/// format 2 as classes, which is the `kind` the matcher takes; format 3 has no
-/// rule *set* at all — the subtable is one rule whose input is coverage tables —
-/// so it is walked as a set of exactly one rule at `sub + 2`, with the first
-/// glyph's coverage left in the input array rather than taken out of it.
+/// The two types and their three formats share one body. A Context rule is a
+/// ChainContext rule with no backtrack and no lookahead, so the chained layout
+/// is walked for both and the two sequences a Context rule lacks have count
+/// zero. Format 1 states its rules as glyph ids and format 2 as classes,
+/// which is the `kind` the matcher takes; format 3 has no rule *set* at all:
+/// the subtable is one rule whose input is coverage tables, so it is walked as
+/// a set of exactly one rule at `sub + 2`, with the first glyph's coverage left
+/// in the input array rather than taken out of it.
 ///
 /// Written as one body on purpose: Slang inlines every function that takes a
 /// descriptor, so a second copy of this block is a second copy of `matchInput`,
 /// `matchLookahead`, `matchBacktrack` and both iterators.
-bool applyContext(OtArena a, OtFace face, uint sub)
+///
+/// The order the three sequences are matched in is HarfBuzz's: input,
+/// lookahead, backtrack. It matters, because the first failure decides.
+bool applyContextual(OtArena a, OtFace face, uint sub, bool chain)
 {
     let format = be16(a, sub);
     if (format < 1u || format > 3u)
@@ -1888,87 +1898,6 @@ bool applyContext(OtArena a, OtFace face, uint sub)
     // Format 3's input array keeps its first entry; formats 1 and 2 take the
     // first glyph from the subtable's own coverage and start the array at the
     // second. That one offset is the whole difference.
-    let first_in_array = format == 3u ? 1u : 0u;
-    let kind = format == 1u ? 0u : (format == 2u ? 1u : 2u);
-    let base = format == 3u ? sub : 0u;
-
-    uint table = 0u;
-    uint set = 0u;
-    uint rules = 1u;
-    if (format != 3u)
-    {
-        if (coverageIndex(a, sub + be16(a, sub + 2u), g_gid[g_cursor]) < 0)
-        {
-            return false;
-        }
-        uint set_index;
-        uint sets_at;
-        uint set_count;
-        if (format == 1u)
-        {
-            set_index = uint(coverageIndex(a, sub + be16(a, sub + 2u), g_gid[g_cursor]));
-            set_count = be16(a, sub + 4u);
-            sets_at = sub + 6u;
-        }
-        else
-        {
-            table = sub + be16(a, sub + 4u);
-            set_index = classDef(a, table, g_gid[g_cursor]);
-            set_count = be16(a, sub + 6u);
-            sets_at = sub + 8u;
-        }
-        if (set_index >= set_count)
-        {
-            return false;
-        }
-        let offset = be16(a, sets_at + set_index * 2u);
-        if (offset == 0u)
-        {
-            return false;
-        }
-        set = sub + offset;
-        rules = otCount(a, set, MAX_LIST);
-    }
-
-    for (uint r = 0u; r < rules; ++r)
-    {
-        // Format 3's one rule is the subtable from its `glyphCount` on, which
-        // puts its fields at the same offsets a SequenceRule has.
-        let rule = format == 3u ? sub + 2u : set + be16(a, set + 2u + r * 2u);
-        let glyphs = be16(a, rule);
-        let lookups = be16(a, rule + 2u);
-        if (glyphs == 0u || glyphs > MAX_CONTEXT)
-        {
-            continue;
-        }
-        let input_at = rule + 4u;
-        if (format == 3u && !covered(a, base + be16(a, input_at), g_gid[g_cursor]))
-        {
-            return false;
-        }
-        if (!matchInput(a, face, glyphs, input_at + first_in_array * 2u, kind, table, base))
-        {
-            continue;
-        }
-        pushFrame(input_at + (glyphs - 1u + first_in_array) * 2u, lookups, glyphs, mp_end);
-        return true;
-    }
-    return false;
-}
-
-/// A ChainContext (GSUB 6 / GPOS 8) subtable at the cursor.
-///
-/// The three formats share one body for the reason `applyContext`'s do. The
-/// order the three sequences are matched in is HarfBuzz's — input, lookahead,
-/// backtrack — and it matters, because the first failure decides.
-bool applyChainContext(OtArena a, OtFace face, uint sub)
-{
-    let format = be16(a, sub);
-    if (format < 1u || format > 3u)
-    {
-        g_flags |= SHAPE_RUN_UNSUPPORTED;
-        return false;
-    }
     let first_in_array = format == 3u ? 1u : 0u;
     let kind = format == 1u ? 0u : (format == 2u ? 1u : 2u);
     let base = format == 3u ? sub : 0u;
@@ -1996,12 +1925,19 @@ bool applyChainContext(OtArena a, OtFace face, uint sub)
         }
         else
         {
-            back_table = sub + be16(a, sub + 4u);
-            input_table = sub + be16(a, sub + 6u);
-            ahead_table = sub + be16(a, sub + 8u);
+            // Context format 2 has one ClassDef where ChainContext format 2
+            // has three; the input ClassDef is the one the rule set is chosen
+            // by, and the other two are read only when they exist.
+            if (chain)
+            {
+                back_table = sub + be16(a, sub + 4u);
+                ahead_table = sub + be16(a, sub + 8u);
+            }
+            input_table = sub + be16(a, chain ? sub + 6u : sub + 4u);
             set_index = classDef(a, input_table, g_gid[g_cursor]);
-            set_count = be16(a, sub + 10u);
-            sets_at = sub + 12u;
+            let count_at = chain ? sub + 10u : sub + 6u;
+            set_count = be16(a, count_at);
+            sets_at = count_at + 2u;
         }
         if (set_index >= set_count)
         {
@@ -2018,22 +1954,40 @@ bool applyChainContext(OtArena a, OtFace face, uint sub)
 
     for (uint r = 0u; r < rules; ++r)
     {
-        // Format 3's one rule is the subtable from its `backtrackGlyphCount`
-        // on, which puts its fields at a ChainedSequenceRule's offsets.
+        // Format 3's one rule is the subtable from its first glyph count on,
+        // which puts its fields at the offsets a rule in a set has.
         let rule = format == 3u ? sub + 2u : set + be16(a, set + 2u + r * 2u);
-        let back_count = be16(a, rule);
-        let back_at = rule + 2u;
-        let input_at_count = back_at + back_count * 2u;
+        // A ChainedSequenceRule opens with its backtrack; a SequenceRule
+        // opens with its input count, followed by its lookup count.
+        uint back_count = 0u;
+        uint back_at = rule;
+        uint input_at_count = rule;
+        if (chain)
+        {
+            back_count = be16(a, rule);
+            back_at = rule + 2u;
+            input_at_count = back_at + back_count * 2u;
+        }
         let input_count = be16(a, input_at_count);
-        let input_at = input_at_count + 2u;
         if (input_count == 0u || input_count > MAX_CONTEXT)
         {
             continue;
         }
-        let ahead_at_count = input_at + (input_count - 1u + first_in_array) * 2u;
-        let ahead_count = be16(a, ahead_at_count);
-        let ahead_at = ahead_at_count + 2u;
-        let lookup_at_count = ahead_at + ahead_count * 2u;
+        let input_at = input_at_count + (chain ? 2u : 4u);
+        let input_end = input_at + (input_count - 1u + first_in_array) * 2u;
+        // A SequenceRule's lookup records follow its input; a
+        // ChainedSequenceRule's follow its lookahead and its lookup count.
+        uint ahead_count = 0u;
+        uint ahead_at = input_end;
+        uint lookup_at_count = input_at_count + 2u;
+        uint records = input_end;
+        if (chain)
+        {
+            ahead_count = be16(a, input_end);
+            ahead_at = input_end + 2u;
+            lookup_at_count = ahead_at + ahead_count * 2u;
+            records = lookup_at_count + 2u;
+        }
         let lookups = be16(a, lookup_at_count);
 
         if (format == 3u && !covered(a, base + be16(a, input_at), g_gid[g_cursor]))
@@ -2054,7 +2008,7 @@ bool applyChainContext(OtArena a, OtFace face, uint sub)
         {
             continue;
         }
-        pushFrame(lookup_at_count + 2u, lookups, input_count, match_end);
+        pushFrame(records, lookups, input_count, match_end);
         return true;
     }
     return false;
@@ -2163,20 +2117,24 @@ bool applySubtables(OtArena a, OtFace face, uint lookups, uint lookup_index, boo
         {
             continue;
         }
+        // The contextual walker is dispatched **before** the table is asked,
+        // so that it has one call site here. GSUB 5 and GPOS 7 are the same
+        // Context subtable, GSUB 6 and GPOS 8 the same ChainContext; a call
+        // under each branch would inline the walker, its matchers and both
+        // iterators twice, which is a third of the module and about a fifth
+        // of the driver's compile time.
         bool hit = false;
-        if (!gpos)
+        let context = gpos ? real == 7u : real == 5u;
+        let chain = gpos ? real == 8u : real == 6u;
+        if (context || chain)
+        {
+            hit = applyContextual(a, face, sub, chain);
+        }
+        else if (!gpos)
         {
             if (real >= 1u && real <= 4u)
             {
                 hit = gsubSimple(a, face, sub, real);
-            }
-            else if (real == 5u)
-            {
-                hit = applyContext(a, face, sub);
-            }
-            else if (real == 6u)
-            {
-                hit = applyChainContext(a, face, sub);
             }
             else if (real == 8u)
             {
@@ -2197,25 +2155,13 @@ bool applySubtables(OtArena a, OtFace face, uint lookups, uint lookup_index, boo
             {
                 hit = gposCursive(a, face, sub);
             }
-            else if (real == 4u)
+            else if (real == 4u || real == 5u)
             {
-                hit = gposMarkBase(a, face, sub, false);
-            }
-            else if (real == 5u)
-            {
-                hit = gposMarkBase(a, face, sub, true);
+                hit = gposMarkBase(a, face, sub, real == 5u);
             }
             else if (real == 6u)
             {
                 hit = gposMarkMark(a, face, sub);
-            }
-            else if (real == 7u)
-            {
-                hit = applyContext(a, face, sub);
-            }
-            else if (real == 8u)
-            {
-                hit = applyChainContext(a, face, sub);
             }
             else
             {
