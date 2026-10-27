@@ -262,6 +262,10 @@ fn hashed_strings(layout: &Shader) -> BTreeMap<u32, String> {
 /// A parameter this cannot classify is an [`SlangError::Reflection`] naming
 /// it, never a silent skip: a binding dropped from a layout renumbers every
 /// binding after it, which is a wrong buffer with no error anywhere.
+///
+/// A specialisation constant (`[[vk::constant_id(n)]] const …`) is a global
+/// parameter too, and binds nothing: its value is the pipeline's, set when the
+/// pipeline is created, so it has no place in a descriptor set and none here.
 fn bindings(layout: &Shader) -> Result<Vec<Binding>, SlangError> {
     let mut out = Vec::with_capacity(layout.parameter_count() as usize);
     for parameter in layout.parameters() {
@@ -271,6 +275,7 @@ fn bindings(layout: &Shader) -> Result<Vec<Binding>, SlangError> {
         };
         match parameter.category() {
             Some(slang::ParameterCategory::DescriptorTableSlot) => {}
+            Some(slang::ParameterCategory::SpecializationConstant) => continue,
             other => {
                 return Err(blame(format!(
                     "binds as {other:?} rather than a descriptor table slot"

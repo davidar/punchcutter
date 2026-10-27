@@ -190,6 +190,62 @@ fn defines_reach_the_shader() {
     assert_spirv(&spirv);
 }
 
+/// A specialisation constant binds nothing: the reflection's bindings are
+/// the descriptors alone, and the module carries the constant as an
+/// `OpSpecConstant` decorated with its `SpecId`, for the pipeline to set.
+#[test]
+fn a_specialisation_constant_is_not_a_binding() {
+    let dir = scratch("specialised");
+    let path = dir.join("specialised.slang");
+    std::fs::write(
+        &path,
+        "[[vk::binding(0, 0)]] RWStructuredBuffer<uint> sink;\n\
+         [[vk::constant_id(3)]] const uint WHICH = 0xffffffffu;\n\
+         [shader(\"compute\")]\n\
+         [numthreads(1, 1, 1)]\n\
+         void specialised(uint3 gid: SV_DispatchThreadID)\n\
+         {\n\
+         \x20   sink[gid.x] = WHICH != 0xffffffffu ? WHICH : 7u;\n\
+         }\n",
+    )
+    .expect("temp dir is writable");
+    let program = compile_program(&path, &["specialised"], &Options::default())
+        .unwrap_or_else(|err| panic!("{err}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    let names: Vec<&str> = program
+        .reflection
+        .bindings
+        .iter()
+        .map(|binding| binding.name.as_str())
+        .collect();
+    assert_eq!(names, ["sink"]);
+
+    let spirv = &program.entries[0].spirv;
+    assert_spirv(spirv);
+    let words: Vec<u32> = spirv
+        .chunks_exact(4)
+        .map(|word| u32::from_le_bytes([word[0], word[1], word[2], word[3]]))
+        .collect();
+    // OpDecorate (71) %id SpecId (1) 3, and OpSpecConstant (50) %type %id
+    // 0xffffffff.
+    let mut decorated = None;
+    let mut specialised = None;
+    let mut at = 5;
+    while at < words.len() {
+        let (count, opcode) = ((words[at] >> 16) as usize, words[at] & 0xffff);
+        let operands = &words[at + 1..at + count.max(1)];
+        if opcode == 71 && operands.len() == 3 && operands[1] == 1 && operands[2] == 3 {
+            decorated = Some(operands[0]);
+        }
+        if opcode == 50 && operands.len() == 3 {
+            specialised = Some((operands[1], operands[2]));
+        }
+        at += count.max(1);
+    }
+    let id = decorated.expect("a SpecId 3 decoration");
+    assert_eq!(specialised, Some((id, 0xffff_ffff)));
+}
+
 #[test]
 fn temp_output_is_cleaned_up() {
     let path = {
