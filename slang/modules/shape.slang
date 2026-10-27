@@ -127,14 +127,14 @@
 //     storage) and not a struct passed `inout`, because `inout` is copy-in
 //     copy-out and the glyph buffer is 8 KiB: five times the SPIR-V;
 //   * `applySubtables` has **one call site**, and so does `applyLookupPass`,
-//     and inside `applySubtables` each walker is called once: the two
-//     contextual types and their three formats share one matching body,
-//     reached from one place whether the table is GSUB or GPOS. Every extra
-//     call site is another copy of a walker, its matchers and both iterators;
+//     and inside `applySubtables` each walker is called once: the three
+//     contextual types and their formats share one matching body, reached
+//     from one place whether the table is GSUB or GPOS. Every extra call site
+//     is another copy of a walker, its matchers and both iterators;
 //   * `otByte` is branchless, because it is inlined about three thousand times
 //     and a bounds `if` in it would be three thousand basic blocks.
 //
-// The result is about 1.2 MB of SPIR-V for one entry point that shapes, and
+// The result is about 1 MB of SPIR-V for one entry point that shapes, and
 // about three seconds of Slang. Both are large, both are measured, and neither
 // is an accident. The driver's compile of that module is what a cold start
 // waits for, and it scales with the copies rather than with the bytes.
@@ -773,6 +773,37 @@ int iterPrev(OtArena a, OtFace face, uint from, uint lookup_props, uint rules,
     return -1;
 }
 
+/// `iterNext` with no glyph test (`kind == 3`): the first position past `from`
+/// that is not skipped, with every skippable one walked past.
+int nextVisible(OtArena a, OtFace face, uint from, uint lookup_props, uint rules)
+{
+    uint at = from;
+    while (at + 1u < g_len)
+    {
+        at += 1u;
+        if (maySkip(a, face, at, lookup_props, rules) == SKIP_NO)
+        {
+            return int(at);
+        }
+    }
+    return -1;
+}
+
+/// And backwards.
+int prevVisible(OtArena a, OtFace face, uint from, uint lookup_props, uint rules)
+{
+    int at = int(from);
+    while (at > 0)
+    {
+        at -= 1;
+        if (maySkip(a, face, uint(at), lookup_props, rules) == SKIP_NO)
+        {
+            return at;
+        }
+    }
+    return -1;
+}
+
 // ---------------------------------------------------------------------------
 // Editing the buffer
 // ---------------------------------------------------------------------------
@@ -1161,15 +1192,23 @@ bool gsubSimple(OtArena a, OtFace face, uint sub, uint type)
 {
     let at = g_cursor;
     let gid = g_gid[at];
+    let format = be16(a, sub);
+    // Types 2, 3 and 4 have one format; type 1 has two and tests its own
+    // below. All four put their Coverage at the same offset, and types 2 to 4
+    // index a list of the same length with the result, so both are read once.
+    if (type != 1u && format != 1u)
+    {
+        g_flags |= SHAPE_RUN_UNSUPPORTED;
+        return false;
+    }
+    let index = coverageIndex(a, sub + be16(a, sub + 2u), gid);
+    if (index < 0 || (type != 1u && uint(index) >= be16(a, sub + 4u)))
+    {
+        return false;
+    }
 
     if (type == 1u)
     {
-        let format = be16(a, sub);
-        let index = coverageIndex(a, sub + be16(a, sub + 2u), gid);
-        if (index < 0)
-        {
-            return false;
-        }
         uint to;
         if (format == 1u)
         {
@@ -1195,16 +1234,6 @@ bool gsubSimple(OtArena a, OtFace face, uint sub, uint type)
 
     if (type == 2u)
     {
-        if (be16(a, sub) != 1u)
-        {
-            g_flags |= SHAPE_RUN_UNSUPPORTED;
-            return false;
-        }
-        let index = coverageIndex(a, sub + be16(a, sub + 2u), gid);
-        if (index < 0 || uint(index) >= be16(a, sub + 4u))
-        {
-            return false;
-        }
         let seq = sub + be16(a, sub + 6u + uint(index) * 2u);
         // A sequence longer than the glyph buffer cannot land in it anyway, so
         // that is this list's cap; the budget pays for it either way.
@@ -1269,16 +1298,6 @@ bool gsubSimple(OtArena a, OtFace face, uint sub, uint type)
 
     if (type == 3u)
     {
-        if (be16(a, sub) != 1u)
-        {
-            g_flags |= SHAPE_RUN_UNSUPPORTED;
-            return false;
-        }
-        let index = coverageIndex(a, sub + be16(a, sub + 2u), gid);
-        if (index < 0 || uint(index) >= be16(a, sub + 4u))
-        {
-            return false;
-        }
         let set = sub + be16(a, sub + 6u + uint(index) * 2u);
         if (be16(a, set) == 0u)
         {
@@ -1292,16 +1311,6 @@ bool gsubSimple(OtArena a, OtFace face, uint sub, uint type)
     }
 
     // Ligature.
-    if (be16(a, sub) != 1u)
-    {
-        g_flags |= SHAPE_RUN_UNSUPPORTED;
-        return false;
-    }
-    let index = coverageIndex(a, sub + be16(a, sub + 2u), gid);
-    if (index < 0 || uint(index) >= be16(a, sub + 4u))
-    {
-        return false;
-    }
     let set = sub + be16(a, sub + 6u + uint(index) * 2u);
     let ligatures = otCount(a, set, MAX_LIST);
     for (uint i = 0u; i < ligatures; ++i)
@@ -1320,44 +1329,6 @@ bool gsubSimple(OtArena a, OtFace face, uint sub, uint type)
         return true;
     }
     return false;
-}
-
-/// ReverseChainSingleSubst (type 8) at the cursor. It runs backwards over the
-/// buffer and never recurses, which is what makes it a type of its own.
-bool gsubReverse(OtArena a, OtFace face, uint sub)
-{
-    if (be16(a, sub) != 1u)
-    {
-        g_flags |= SHAPE_RUN_UNSUPPORTED;
-        return false;
-    }
-    let index = coverageIndex(a, sub + be16(a, sub + 2u), g_gid[g_cursor]);
-    if (index < 0)
-    {
-        return false;
-    }
-    let back_count = be16(a, sub + 4u);
-    let back_at = sub + 6u;
-    let ahead_count = be16(a, back_at + back_count * 2u);
-    let ahead_at = back_at + back_count * 2u + 2u;
-    let subst_count = be16(a, ahead_at + ahead_count * 2u);
-    let subst_at = ahead_at + ahead_count * 2u + 2u;
-
-    if (!matchBacktrack(a, face, back_count, back_at, 2u, 0u, sub))
-    {
-        return false;
-    }
-    if (!matchLookahead(a, face, ahead_count, ahead_at, 2u, 0u, sub, g_cursor + 1u))
-    {
-        return false;
-    }
-    if (uint(index) >= subst_count)
-    {
-        return false;
-    }
-    setGlyph(a, face, g_cursor, be16(a, subst_at + uint(index) * 2u), 0u, false, false);
-    // The cursor is *not* advanced: the backward pass moves it.
-    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -1383,15 +1354,16 @@ bool gposPair(OtArena a, OtFace face, uint sub, uint type)
 {
     let at = g_cursor;
     let gid = g_gid[at];
+    // Both types put their Coverage at the same offset, so it is read once.
+    let format = be16(a, sub);
+    let index = coverageIndex(a, sub + be16(a, sub + 2u), gid);
+    if (index < 0)
+    {
+        return false;
+    }
 
     if (type == 1u)
     {
-        let format = be16(a, sub);
-        let index = coverageIndex(a, sub + be16(a, sub + 2u), gid);
-        if (index < 0)
-        {
-            return false;
-        }
         let value_format = be16(a, sub + 4u);
         uint value_at;
         if (format == 1u)
@@ -1416,13 +1388,7 @@ bool gposPair(OtArena a, OtFace face, uint sub, uint type)
         return true;
     }
 
-    let format = be16(a, sub);
-    let index = coverageIndex(a, sub + be16(a, sub + 2u), gid);
-    if (index < 0)
-    {
-        return false;
-    }
-    let next = iterNext(a, face, at, g_lookup_props, g_rules_input, 3u, 0u, 0u);
+    let next = nextVisible(a, face, at, g_lookup_props, g_rules_input);
     if (next < 0)
     {
         return false;
@@ -1554,7 +1520,7 @@ bool gposCursive(OtArena a, OtFace face, uint sub)
     }
     // The cursive iterator keeps the lookup's flags but not its Ignore bits.
     let props = g_lookup_props & ~PROPS_IGNORE;
-    let next = iterNext(a, face, i, props, g_rules_input, 3u, 0u, 0u);
+    let next = nextVisible(a, face, i, props, g_rules_input);
     if (next < 0)
     {
         return false;
@@ -1672,7 +1638,7 @@ int markBase(OtArena a, OtFace face)
     int at = int(g_cursor);
     while (at > 0)
     {
-        let found = iterPrev(a, face, uint(at), PROPS_MARK, g_rules_input, 3u, 0u, 0u);
+        let found = prevVisible(a, face, uint(at), PROPS_MARK, g_rules_input);
         if (found < 0)
         {
             return -1;
@@ -1782,7 +1748,7 @@ bool gposMarkMark(OtArena a, OtFace face, uint sub)
     // Unlike MarkToBase, this one keeps the lookup's flags — mark filtering set
     // and attachment class included — and only clears the three Ignore bits.
     let props = g_lookup_props & ~PROPS_IGNORE;
-    let found = iterPrev(a, face, g_cursor, props, g_rules_input, 3u, 0u, 0u);
+    let found = prevVisible(a, face, g_cursor, props, g_rules_input);
     if (found < 0)
     {
         return false;
@@ -1869,17 +1835,29 @@ void pushFrame(uint records, uint record_count, uint count, uint match_end)
     fr_pushed = true;
 }
 
-/// A Context (GSUB 5 / GPOS 7) or ChainContext (GSUB 6 / GPOS 8) subtable at
-/// the cursor.
+/// What `applyContextual` is walking.
+static const uint CTX_CONTEXT = 0u;
+static const uint CTX_CHAIN = 1u;
+static const uint CTX_REVERSE = 2u;
+
+/// A Context (GSUB 5 / GPOS 7), ChainContext (GSUB 6 / GPOS 8) or
+/// ReverseChainSingleSubst (GSUB 8) subtable at the cursor.
 ///
-/// The two types and their three formats share one body. A Context rule is a
+/// The three types and their formats share one body, because they match the
+/// same way and differ in what they do with a match. A Context rule is a
 /// ChainContext rule with no backtrack and no lookahead, so the chained layout
 /// is walked for both and the two sequences a Context rule lacks have count
-/// zero. Format 1 states its rules as glyph ids and format 2 as classes,
-/// which is the `kind` the matcher takes; format 3 has no rule *set* at all:
-/// the subtable is one rule whose input is coverage tables, so it is walked as
-/// a set of exactly one rule at `sub + 2`, with the first glyph's coverage left
-/// in the input array rather than taken out of it.
+/// zero. A ReverseChainSingleSubst is a ChainContext of format 3 with one input
+/// glyph, the subtable's own coverage, and a list of substitutes where the
+/// lookup records would be; it substitutes in place instead of pushing a
+/// frame, and leaves the cursor where it is because the backward pass moves
+/// it.
+///
+/// Format 1 states its rules as glyph ids and format 2 as classes, which is
+/// the `kind` the matcher takes; format 3 has no rule *set* at all: the
+/// subtable is one rule whose input is coverage tables, so it is walked as a
+/// set of exactly one rule at `sub + 2`, with the first glyph's coverage left in
+/// the input array rather than taken out of it.
 ///
 /// Written as one body on purpose: Slang inlines every function that takes a
 /// descriptor, so a second copy of this block is a second copy of `matchInput`,
@@ -1887,30 +1865,44 @@ void pushFrame(uint records, uint record_count, uint count, uint match_end)
 ///
 /// The order the three sequences are matched in is HarfBuzz's: input,
 /// lookahead, backtrack. It matters, because the first failure decides.
-bool applyContextual(OtArena a, OtFace face, uint sub, bool chain)
+bool applyContextual(OtArena a, OtFace face, uint sub, uint what)
 {
+    let chain = what == CTX_CHAIN;
+    let reverse = what == CTX_REVERSE;
     let format = be16(a, sub);
-    if (format < 1u || format > 3u)
+    if (format < 1u || format > (reverse ? 1u : 3u))
     {
         g_flags |= SHAPE_RUN_UNSUPPORTED;
         return false;
     }
     // Format 3's input array keeps its first entry; formats 1 and 2 take the
     // first glyph from the subtable's own coverage and start the array at the
-    // second. That one offset is the whole difference.
+    // second. That one offset is the whole difference. The reverse type has
+    // no input array at all.
+    let coverage_input = format == 3u || reverse;
     let first_in_array = format == 3u ? 1u : 0u;
-    let kind = format == 1u ? 0u : (format == 2u ? 1u : 2u);
-    let base = format == 3u ? sub : 0u;
+    let kind = coverage_input ? 2u : (format == 1u ? 0u : 1u);
+    let base = coverage_input ? sub : 0u;
 
     uint back_table = 0u;
     uint input_table = 0u;
     uint ahead_table = 0u;
     uint set = 0u;
     uint rules = 1u;
-    if (format != 3u)
+    // The reverse type's coverage index picks its substitute.
+    int index = -1;
+    if (reverse)
     {
-        let index = coverageIndex(a, sub + be16(a, sub + 2u), g_gid[g_cursor]);
+        index = coverageIndex(a, sub + be16(a, sub + 2u), g_gid[g_cursor]);
         if (index < 0)
+        {
+            return false;
+        }
+    }
+    else if (format != 3u)
+    {
+        let covered_at = coverageIndex(a, sub + be16(a, sub + 2u), g_gid[g_cursor]);
+        if (covered_at < 0)
         {
             return false;
         }
@@ -1919,7 +1911,7 @@ bool applyContextual(OtArena a, OtFace face, uint sub, bool chain)
         uint set_count;
         if (format == 1u)
         {
-            set_index = uint(index);
+            set_index = uint(covered_at);
             set_count = be16(a, sub + 4u);
             sets_at = sub + 6u;
         }
@@ -1955,33 +1947,41 @@ bool applyContextual(OtArena a, OtFace face, uint sub, bool chain)
     for (uint r = 0u; r < rules; ++r)
     {
         // Format 3's one rule is the subtable from its first glyph count on,
-        // which puts its fields at the offsets a rule in a set has.
-        let rule = format == 3u ? sub + 2u : set + be16(a, set + 2u + r * 2u);
+        // which puts its fields at the offsets a rule in a set has; the
+        // reverse type's is the subtable from its backtrack count on.
+        let rule = reverse ? sub + 4u : (format == 3u ? sub + 2u : set + be16(a, set + 2u + r * 2u));
         // A ChainedSequenceRule opens with its backtrack; a SequenceRule
         // opens with its input count, followed by its lookup count.
         uint back_count = 0u;
         uint back_at = rule;
         uint input_at_count = rule;
-        if (chain)
+        if (chain || reverse)
         {
             back_count = be16(a, rule);
             back_at = rule + 2u;
             input_at_count = back_at + back_count * 2u;
         }
-        let input_count = be16(a, input_at_count);
-        if (input_count == 0u || input_count > MAX_CONTEXT)
+        uint input_count = 1u;
+        if (!reverse)
         {
-            continue;
+            input_count = be16(a, input_at_count);
+            if (input_count == 0u || input_count > MAX_CONTEXT)
+            {
+                continue;
+            }
         }
         let input_at = input_at_count + (chain ? 2u : 4u);
-        let input_end = input_at + (input_count - 1u + first_in_array) * 2u;
+        let input_end =
+            reverse ? input_at_count : input_at + (input_count - 1u + first_in_array) * 2u;
         // A SequenceRule's lookup records follow its input; a
-        // ChainedSequenceRule's follow its lookahead and its lookup count.
+        // ChainedSequenceRule's follow its lookahead and its lookup count,
+        // and the reverse type's substitutes follow its lookahead and their
+        // count the same way.
         uint ahead_count = 0u;
         uint ahead_at = input_end;
         uint lookup_at_count = input_at_count + 2u;
         uint records = input_end;
-        if (chain)
+        if (chain || reverse)
         {
             ahead_count = be16(a, input_end);
             ahead_at = input_end + 2u;
@@ -2007,6 +2007,15 @@ bool applyContextual(OtArena a, OtFace face, uint sub, bool chain)
         if (!matchBacktrack(a, face, back_count, back_at, kind, back_table, base))
         {
             continue;
+        }
+        if (reverse)
+        {
+            if (uint(index) >= lookups)
+            {
+                return false;
+            }
+            setGlyph(a, face, g_cursor, be16(a, records + uint(index) * 2u), 0u, false, false);
+            return true;
         }
         pushFrame(records, lookups, input_count, match_end);
         return true;
@@ -2119,26 +2128,24 @@ bool applySubtables(OtArena a, OtFace face, uint lookups, uint lookup_index, boo
         }
         // The contextual walker is dispatched **before** the table is asked,
         // so that it has one call site here. GSUB 5 and GPOS 7 are the same
-        // Context subtable, GSUB 6 and GPOS 8 the same ChainContext; a call
-        // under each branch would inline the walker, its matchers and both
-        // iterators twice, which is a third of the module and about a fifth
-        // of the driver's compile time.
+        // Context subtable, GSUB 6 and GPOS 8 the same ChainContext, and
+        // GSUB 8 matches the same way; a call under each branch would inline
+        // the walker, its matchers and both iterators twice, which is a third
+        // of the module and about a fifth of the driver's compile time.
         bool hit = false;
         let context = gpos ? real == 7u : real == 5u;
         let chain = gpos ? real == 8u : real == 6u;
-        if (context || chain)
+        let reverse = !gpos && real == 8u;
+        if (context || chain || reverse)
         {
-            hit = applyContextual(a, face, sub, chain);
+            hit = applyContextual(a, face, sub,
+                                  chain ? CTX_CHAIN : (reverse ? CTX_REVERSE : CTX_CONTEXT));
         }
         else if (!gpos)
         {
             if (real >= 1u && real <= 4u)
             {
                 hit = gsubSimple(a, face, sub, real);
-            }
-            else if (real == 8u)
-            {
-                hit = gsubReverse(a, face, sub);
             }
             else
             {
