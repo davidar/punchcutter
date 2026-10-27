@@ -1,19 +1,27 @@
-// The entry point `shape/examples/conform.rs` dispatches, and the smallest
+// The entry points `shape/examples/conform.rs` dispatches, and the smallest
 // possible example of hosting `shape.slang`.
 //
 // `shape.slang` declares no bindings, so a host decides its own numbers — a
 // consumer can keep set 0 for its own buffers and bind the shaper's in a set
-// of their own. Hosting the module is this file: bind the
-// buffers, gather the handles into a `ShapeTables`, call `shapeRun` once per
-// thread. Nothing else.
+// of their own. Hosting the module is this file: bind the buffers, gather the
+// handles into a `ShapeTables`, and declare one entry point per stage, each
+// calling its stage once per thread. Nothing else.
 //
-// The font is one arena of verbatim OpenType bytes, so a host binds **two** buffers for it: the arena and the
-// strings.
+// The font is one arena of verbatim OpenType bytes, so a host binds **two**
+// buffers for it: the arena and the strings. The stages hand a string's
+// working state from one dispatch to the next through a third, the scratch
+// buffer: one `ShapeScratch` per request.
+//
+// A host dispatches the four entries in order over the same batch:
+// `shape_decode`, `shape_substitute`, `shape_position`, `shape_finish`
+// (`punchcutter_shape::STAGE_ENTRIES`). Each is its own pipeline, so a driver
+// compiles four smaller programs rather than one large one, and a host can
+// build them in parallel.
 //
 // It is also what the reflection test compiles: `shape/tests/layout.rs` reflects
-// `shape_batch` and compares Slang's own per-field byte offsets against
-// `offset_of!` on the Rust side, which is how Slang's layout of
-// `shape_abi.slang` is kept equal to `shape/src/abi.rs`.
+// it and compares Slang's own per-field byte offsets against `offset_of!` on
+// the Rust side, which is how Slang's layout of `shape_abi.slang` is kept equal
+// to `shape/src/abi.rs`.
 
 import shape;
 
@@ -38,8 +46,12 @@ RWStructuredBuffer<ShapedGlyph> out_glyphs;
 [[vk::binding(5, 0)]]
 RWStructuredBuffer<ShapeRun> out_runs;
 
-/// The handles, gathered. Two lines, and the module needs no bindings of its
-/// own — which is the whole point of `ShapeTables`.
+/// One `ShapeScratch` per request: `punchcutter_shape::scratch_bytes`.
+[[vk::binding(6, 0)]]
+RWStructuredBuffer<ShapeScratch> scratch;
+
+/// The handles, gathered. The module needs no bindings of its own, which is
+/// the whole point of `ShapeTables`.
 ShapeTables tables()
 {
     ShapeTables t;
@@ -51,26 +63,43 @@ ShapeTables tables()
     t.utf8_alt0 = utf8;
     t.utf8_alt1 = utf8;
     t.source = 0u;
+    t.scratch = scratch;
     return t;
 }
 
-/// One thread, one string. `SHAPE_WORKGROUP` in `shape/src/abi.rs` mirrors the
-/// 64 below; `Batch::workgroups` divides by it.
+// One thread, one string, in every stage. `SHAPE_WORKGROUP` in
+// `shape/src/abi.rs` mirrors the 64 below; `Batch::workgroups` divides by it.
+// The scratch slot is the request's index.
+
 [shader("compute")]
 [numthreads(64, 1, 1)]
-void shape_batch(uint3 gid: SV_DispatchThreadID)
+void shape_substitute(uint3 gid: SV_DispatchThreadID)
 {
-    let index = gid.x;
-    if (index >= params.request_count)
+    if (gid.x < params.request_count)
     {
-        return;
+        shapeSubstitute(tables(), params, requests[gid.x], gid.x);
     }
-    out_runs[index] = shapeRun(
-        tables(),
-        params,
-        requests[index],
-        out_glyphs,
-        params.glyph_capacity);
+}
+
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void shape_position(uint3 gid: SV_DispatchThreadID)
+{
+    if (gid.x < params.request_count)
+    {
+        shapePosition(tables(), params, requests[gid.x], gid.x);
+    }
+}
+
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void shape_finish(uint3 gid: SV_DispatchThreadID)
+{
+    if (gid.x < params.request_count)
+    {
+        out_runs[gid.x] = shapeFinish(tables(), params, requests[gid.x], gid.x, out_glyphs,
+                                      params.glyph_capacity);
+    }
 }
 
 /// The device clock's rate, measured by the host, so that a run's wall-clock

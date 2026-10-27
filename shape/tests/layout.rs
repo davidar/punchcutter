@@ -28,10 +28,13 @@ fn slang_dir() -> PathBuf {
 #[test]
 fn the_slang_layout_matches_this_one() {
     let source = slang_dir().join("shape_demo.slang");
-    let reflected =
-        punchcutter_slang::reflect(&source, punchcutter_shape::DEMO_ENTRY, &Options::default())
-            .unwrap_or_else(|err| panic!("reflection failed:\n{err}"))
-            .structs;
+    let reflected = punchcutter_slang::reflect(
+        &source,
+        punchcutter_shape::STAGE_ENTRIES[0],
+        &Options::default(),
+    )
+    .unwrap_or_else(|err| panic!("reflection failed:\n{err}"))
+    .structs;
 
     let mut checked = 0usize;
     for entry in punchcutter_shape::abi::structs() {
@@ -70,7 +73,7 @@ fn the_slang_layout_matches_this_one() {
         );
         checked += 1;
     }
-    assert_eq!(checked, 5, "the five structs a binding's layout reaches");
+    assert_eq!(checked, 7, "the seven structs a binding's layout reaches");
 }
 
 /// The two Slang files that are *not* generated do not declare the ABI's names

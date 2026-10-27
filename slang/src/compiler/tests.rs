@@ -36,7 +36,9 @@ fn assert_spirv(module: &[u8]) {
 fn the_demos_compile_with_nothing_to_report() {
     for (file, entry) in [
         ("text_demo.slang", "text_demo"),
-        ("shape_demo.slang", "shape_batch"),
+        ("shape_demo.slang", "shape_substitute"),
+        ("shape_demo.slang", "shape_position"),
+        ("shape_demo.slang", "shape_finish"),
     ] {
         let program = compile_program(&modules_dir().join(file), &[entry], &Options::default())
             .unwrap_or_else(|err| panic!("{file} should compile:\n{err}"));
@@ -78,7 +80,7 @@ fn a_shader_elsewhere_imports_the_engine() {
 fn a_program_is_its_entries_compiled_together() {
     let source = modules_dir().join("shape_demo.slang");
     let options = Options::default();
-    let program = compile_program(&source, &["shape_batch", "clock_probe"], &options)
+    let program = compile_program(&source, &["shape_finish", "clock_probe"], &options)
         .unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(program.entries.len(), 2);
     for entry in &program.entries {

@@ -68,8 +68,8 @@ pub use abi::{
     SHAPE_GLYPH_NOTDEF, SHAPE_GLYPH_POSITIONED, SHAPE_GLYPH_SUBSTITUTED, SHAPE_GLYPH_UNFILLED,
     SHAPE_RUN_BAD_UTF8, SHAPE_RUN_DEADLINE, SHAPE_RUN_MULTI_FACE, SHAPE_RUN_NOTDEF,
     SHAPE_RUN_OUT_OF_OPS, SHAPE_RUN_POSITIONED, SHAPE_RUN_SUBSTITUTED, SHAPE_RUN_TRUNCATED,
-    SHAPE_RUN_UNSUPPORTED, SHAPE_WORKGROUP, ShapeFont, ShapeParams, ShapeRequest, ShapeRun,
-    ShapedGlyph,
+    SHAPE_RUN_UNSUPPORTED, SHAPE_SCRATCH_BYTES, SHAPE_WORKGROUP, STAGE_ENTRIES, ShapeFont,
+    ShapeParams, ShapeRequest, ShapeRun, ShapeScratch, ShapedGlyph, scratch_bytes,
 };
 pub use batch::{Batch, Feature};
 pub use font::{Arena, FaceInfo, FontError};
@@ -79,6 +79,3 @@ pub use font::{Arena, FaceInfo, FontError};
 /// second, which imports the first.
 pub const SLANG_OT: &str = "ot.slang";
 pub const SLANG_SHAPE: &str = "shape.slang";
-
-/// The entry point in `slang/modules/shape_demo.slang` that the harness dispatches.
-pub const DEMO_ENTRY: &str = "shape_batch";

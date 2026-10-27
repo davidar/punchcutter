@@ -189,8 +189,8 @@ public static const uint MAX_LIST = 128u;
 /// `.notdef`, by definition of the format.
 public static const uint NOTDEF_GLYPH = 0u;
 
-/// The two buffers the shaper reads, gathered so the entry point decides its
-/// own bindings.
+/// The buffers the shaper reads and writes, gathered so the entry point
+/// decides its own bindings.
 ///
 /// This module declares **no bindings of its own** — deliberately. The
 /// importing shader owns its descriptor sets and places these where it likes;
@@ -224,6 +224,10 @@ public struct ShapeTables
     public RWStructuredBuffer<uint> utf8_alt1;
     /// 0, 1 or 2: which of the three the request's `byte_start` indexes.
     public uint source;
+    /// The working state one stage hands the next: one `ShapeScratch` per
+    /// request, at the index the stage is given as `slot`. Only the shaper
+    /// reads or writes it; the host allocates it and binds it.
+    public RWStructuredBuffer<ShapeScratch> scratch;
 }
 
 // ---------------------------------------------------------------------------
@@ -295,7 +299,9 @@ static const uint RULES_HIDDEN = 4u;
 // semantics, and a glyph buffer is 8 KiB. Passing it through the iterators and
 // the twelve subtable walkers below produced **7.9 MB of SPIR-V**. A `static`
 // here is a lane's own storage (SPIR-V `Private`), not shared state: nothing
-// below is written by two threads, and nothing outlives `shapeRun`.
+// below is written by two threads, and nothing outlives the stage's entry
+// point. What one stage hands the next goes through `ShapeTables.scratch`
+// (*The stages*, below).
 // ---------------------------------------------------------------------------
 
 /// The glyph id **in the segment's face**, not the merged space. The base is
@@ -362,14 +368,6 @@ static uint fr_depth;
 /// finishing on its own.
 static bool fr_pushed;
 
-/// The passes one segment runs: GSUB stage 0 (`rvrn`), GSUB stage 1, GPOS.
-///
-/// A `static` rather than a literal 3 **on purpose**: with a constant trip
-/// count Slang unrolls the loop in `shapeSegment` and inlines the whole
-/// subtable dispatch — every walker in this file — once per pass. This is the
-/// same economy `applySubtables`' one call site buys, spelled a second way.
-static uint g_passes = 3u;
-
 /// `match_input`'s answer: where the input glyphs are, where they end, and how
 /// many ligature components they carry between them. One shared buffer, because
 /// a match is always consumed before the next one starts.
@@ -408,7 +406,7 @@ static uint sb_union_lo;
 static uint sb_union_hi;
 
 /// The features this run forces on or off, copied out of
-/// `ShapeParams.features` at the top of `shapeRun` — one word each, a packed
+/// `ShapeParams.features` at the top of every stage — one word each, a packed
 /// OpenType tag with `SHAPE_FEATURE_ON` set for on and clear for off.
 ///
 /// A module-scope copy rather than a parameter for the reason the rest of the
@@ -703,62 +701,21 @@ bool contextMatches(OtArena a, uint at, uint kind, uint datum, uint table)
     return covered(a, datum, g_gid[at]);
 }
 
-/// `skipping_iterator_t::next`: the first position past `from` that matches, or
-/// −1 when a non-skippable glyph fails the test first.
+/// `skipping_iterator_t::next`, or `prev` when `backward`: the first position
+/// past `from` in that direction that matches, or −1 when a non-skippable
+/// glyph fails the test first.
 ///
-/// With `kind == 3` there is no glyph test, so the answer is the first SKIP_NO
-/// glyph and every skippable one is walked past.
-int iterNext(OtArena a, OtFace face, uint from, uint lookup_props, uint rules,
-             uint kind, uint datum, uint table)
-{
-    uint at = from;
-    while (at + 1u < g_len)
-    {
-        at += 1u;
-        let skip = maySkip(a, face, at, lookup_props, rules);
-        if (skip == SKIP_YES)
-        {
-            continue;
-        }
-        if (kind == 3u)
-        {
-            if (skip == SKIP_NO)
-            {
-                return int(at);
-            }
-            continue;
-        }
-        if (contextMatches(a, at, kind, datum, table))
-        {
-            return int(at);
-        }
-        if (skip == SKIP_NO)
-        {
-            return -1;
-        }
-    }
-    return -1;
-}
-
-/// And backwards.
-int iterPrev(OtArena a, OtFace face, uint from, uint lookup_props, uint rules,
+/// One body for both directions, so the contextual walker inlines it once.
+int iterStep(OtArena a, OtFace face, uint from, bool backward, uint lookup_props, uint rules,
              uint kind, uint datum, uint table)
 {
     int at = int(from);
-    while (at > 0)
+    while (backward ? at > 0 : uint(at) + 1u < g_len)
     {
-        at -= 1;
+        at += backward ? -1 : 1;
         let skip = maySkip(a, face, uint(at), lookup_props, rules);
         if (skip == SKIP_YES)
         {
-            continue;
-        }
-        if (kind == 3u)
-        {
-            if (skip == SKIP_NO)
-            {
-                return at;
-            }
             continue;
         }
         if (contextMatches(a, uint(at), kind, datum, table))
@@ -773,7 +730,7 @@ int iterPrev(OtArena a, OtFace face, uint from, uint lookup_props, uint rules,
     return -1;
 }
 
-/// `iterNext` with no glyph test (`kind == 3`): the first position past `from`
+/// `iterStep` forwards with no glyph test: the first position past `from`
 /// that is not skipped, with every skippable one walked past.
 int nextVisible(OtArena a, OtFace face, uint from, uint lookup_props, uint rules)
 {
@@ -973,39 +930,69 @@ void removeAt(uint at, uint count)
 // Matching a contextual rule
 // ---------------------------------------------------------------------------
 
-/// `match_input`: the positions of a rule's `count` input glyphs, the first
-/// being the cursor, into `mp_pos`; `mp_end` and `mp_total` come with them.
-/// False when the sequence does not match.
+/// What `matchSequence` matches.
+static const uint SEQ_INPUT = 0u;
+static const uint SEQ_LOOKAHEAD = 1u;
+static const uint SEQ_BACKTRACK = 2u;
+
+/// One of a rule's three sequences, HarfBuzz's `match_input`,
+/// `match_lookahead` and `match_backtrack` as one body.
 ///
-/// `datum_at` is where the input values start, two bytes each, beginning with
-/// the *second* glyph. For `kind == 2` the values are offsets from `base`.
-bool matchInput(OtArena a, OtFace face, uint count, uint datum_at, uint kind,
-                uint table, uint base)
+/// * `SEQ_INPUT`: the positions of the rule's `count` input glyphs, the first
+///   being the cursor, into `mp_pos`; `mp_end` and `mp_total` come with them.
+///   `datum_at` is where the input values start, two bytes each, beginning
+///   with the *second* glyph.
+/// * `SEQ_LOOKAHEAD`: `count` glyphs at or after `mp_end`, forwards. The
+///   iterator starts one before it, because a step comes first.
+/// * `SEQ_BACKTRACK`: `count` glyphs before the cursor, in the order the
+///   table states them (which is away from the cursor).
+///
+/// For `kind == 2` the values are offsets from `base`. False when the
+/// sequence does not match. One body because each copy of it is a copy of the
+/// iterator, inlined.
+bool matchSequence(OtArena a, OtFace face, uint seq, uint count, uint datum_at, uint kind,
+                   uint table, uint base)
 {
-    mp_pos[0] = g_cursor;
-    mp_end = g_cursor + 1u;
-    mp_total = ligNumComps(g_props[g_cursor], g_lig[g_cursor]);
-    if (count > MAX_CONTEXT)
-    {
-        g_flags |= SHAPE_RUN_UNSUPPORTED;
-        return false;
-    }
-
-    let first_lig_id = ligId(g_lig[g_cursor]);
-    let first_lig_comp = ligComp(g_lig[g_cursor]);
-
+    let input = seq == SEQ_INPUT;
+    let backward = seq == SEQ_BACKTRACK;
+    let rules = input ? g_rules_input : g_rules_context;
     uint at = g_cursor;
-    for (uint i = 1u; i < count; ++i)
+    uint steps = count;
+    uint first_lig_id = 0u;
+    uint first_lig_comp = 0u;
+    if (input)
     {
-        let datum = be16(a, datum_at + (i - 1u) * 2u);
+        mp_pos[0] = g_cursor;
+        mp_end = g_cursor + 1u;
+        mp_total = ligNumComps(g_props[g_cursor], g_lig[g_cursor]);
+        if (count > MAX_CONTEXT)
+        {
+            g_flags |= SHAPE_RUN_UNSUPPORTED;
+            return false;
+        }
+        first_lig_id = ligId(g_lig[g_cursor]);
+        first_lig_comp = ligComp(g_lig[g_cursor]);
+        steps = count == 0u ? 0u : count - 1u;
+    }
+    else if (!backward)
+    {
+        at = mp_end == 0u ? 0u : mp_end - 1u;
+    }
+    for (uint i = 0u; i < steps; ++i)
+    {
+        let datum = be16(a, datum_at + i * 2u);
         let value = kind == 2u ? base + datum : datum;
-        let found = iterNext(a, face, at, g_lookup_props, g_rules_input, kind, value, table);
+        let found = iterStep(a, face, at, backward, g_lookup_props, rules, kind, value, table);
         if (found < 0)
         {
             return false;
         }
         at = uint(found);
-        mp_pos[i] = at;
+        if (!input)
+        {
+            continue;
+        }
+        mp_pos[i + 1u] = at;
 
         // HarfBuzz's rule for ligating glyphs that are already components of an
         // earlier ligature: either they all belong to the same component of the
@@ -1028,49 +1015,18 @@ bool matchInput(OtArena a, OtFace face, uint count, uint datum_at, uint kind,
         }
         mp_total += ligNumComps(g_props[at], g_lig[at]);
     }
-    mp_end = at + 1u;
-    return true;
-}
-
-/// `match_backtrack`: `count` glyphs before the cursor, in the order the table
-/// states them (which is away from the cursor).
-bool matchBacktrack(OtArena a, OtFace face, uint count, uint datum_at, uint kind,
-                    uint table, uint base)
-{
-    uint at = g_cursor;
-    for (uint i = 0u; i < count; ++i)
+    if (input)
     {
-        let datum = be16(a, datum_at + i * 2u);
-        let value = kind == 2u ? base + datum : datum;
-        let found = iterPrev(a, face, at, g_lookup_props, g_rules_context, kind, value, table);
-        if (found < 0)
-        {
-            return false;
-        }
-        at = uint(found);
+        mp_end = at + 1u;
     }
     return true;
 }
 
-/// `match_lookahead`: `count` glyphs at or after `match_end`, forwards. The
-/// iterator starts one before it, because `next()` steps first.
-bool matchLookahead(OtArena a, OtFace face, uint count, uint datum_at, uint kind,
-                    uint table, uint base, uint match_end)
-{
-    uint at = match_end == 0u ? 0u : match_end - 1u;
-    for (uint i = 0u; i < count; ++i)
-    {
-        let datum = be16(a, datum_at + i * 2u);
-        let value = kind == 2u ? base + datum : datum;
-        let found = iterNext(a, face, at, g_lookup_props, g_rules_context, kind, value, table);
-        if (found < 0)
-        {
-            return false;
-        }
-        at = uint(found);
-    }
-    return true;
-}
+/// The three sequences a contextual walker asks for, as one loop with one call.
+///
+/// A `static` trip count, for the reason `g_gsub_stages` is one: a literal
+/// would be unrolled, and the matcher inlined three times.
+static uint g_sequences = 3u;
 
 /// `ligate_input`: rewrite the `count` glyphs `mp_pos` names into one ligature.
 ///
@@ -1321,7 +1277,7 @@ bool gsubSimple(OtArena a, OtFace face, uint sub, uint type)
         {
             continue;
         }
-        if (!matchInput(a, face, comps, liga + 4u, 0u, 0u, 0u))
+        if (!matchSequence(a, face, SEQ_INPUT, comps, liga + 4u, 0u, 0u, 0u))
         {
             continue;
         }
@@ -1860,8 +1816,8 @@ static const uint CTX_REVERSE = 2u;
 /// the input array rather than taken out of it.
 ///
 /// Written as one body on purpose: Slang inlines every function that takes a
-/// descriptor, so a second copy of this block is a second copy of `matchInput`,
-/// `matchLookahead`, `matchBacktrack` and both iterators.
+/// descriptor, so a second copy of this block is a second copy of
+/// `matchSequence` and the iterator.
 ///
 /// The order the three sequences are matched in is HarfBuzz's: input,
 /// lookahead, backtrack. It matters, because the first failure decides.
@@ -1994,20 +1950,31 @@ bool applyContextual(OtArena a, OtFace face, uint sub, uint what)
         {
             return false;
         }
-        if (!matchInput(a, face, input_count, input_at + first_in_array * 2u, kind,
-                        input_table, base))
+        bool matched = true;
+        for (uint seq = 0u; seq < g_sequences && matched; ++seq)
+        {
+            uint seq_count = input_count;
+            uint seq_at = input_at + first_in_array * 2u;
+            uint seq_table = input_table;
+            if (seq == SEQ_LOOKAHEAD)
+            {
+                seq_count = ahead_count;
+                seq_at = ahead_at;
+                seq_table = ahead_table;
+            }
+            else if (seq == SEQ_BACKTRACK)
+            {
+                seq_count = back_count;
+                seq_at = back_at;
+                seq_table = back_table;
+            }
+            matched = matchSequence(a, face, seq, seq_count, seq_at, kind, seq_table, base);
+        }
+        if (!matched)
         {
             continue;
         }
         let match_end = mp_end;
-        if (!matchLookahead(a, face, ahead_count, ahead_at, kind, ahead_table, base, match_end))
-        {
-            continue;
-        }
-        if (!matchBacktrack(a, face, back_count, back_at, kind, back_table, base))
-        {
-            continue;
-        }
         if (reverse)
         {
             if (uint(index) >= lookups)
@@ -3061,7 +3028,7 @@ void propagateAttachment(uint start)
 }
 
 // ---------------------------------------------------------------------------
-// One segment, and one request
+// Which face draws a codepoint
 // ---------------------------------------------------------------------------
 
 /// Which face in the directory draws a codepoint: the first whose `cmap` has
@@ -3106,56 +3073,458 @@ uint faceFor(OtArena a, uint face_count, uint codepoint, out uint local)
     return 0u;
 }
 
-/// Substitute, position and write out the segment sitting in the buffer.
+// ---------------------------------------------------------------------------
+// The stages
+//
+// A string is shaped in four dispatches, each its own entry point and
+// pipeline, in this order over the whole batch:
+//
+//   1. `shapeDecode`     UTF-8, the face segments, `cmap`, GDEF classes;
+//   2. `shapeSubstitute` GSUB stage 0 (`rvrn`) and stage 1, per segment;
+//   3. `shapePosition`   advances and GPOS, per segment;
+//   4. `shapeFinish`     mark advances, default ignorables, attachment
+//                        chains, 26.6 output, the run record.
+//
+// What one stage leaves for the next is in `ShapeTables.scratch[slot]`: the
+// glyph arrays of every segment back to back, the segment table, and the
+// budget, flags and depth the string has spent so far. Each stage loads one
+// segment into the `g_*` arrays, works on it there, and stores it back, so
+// every walker above sees exactly one segment in `g_*`, as it would in one
+// pass.
+//
+// The two GSUB stages share a pipeline. Splitting them would compile every
+// GSUB walker twice and shorten neither pipeline.
+// ---------------------------------------------------------------------------
+
+/// `ShapeScratch.segment[s]`: the segment's glyph count, its face, and whether
+/// its lookups were stopped (HarfBuzz's `buffer->successful`).
+static const uint SEG_LEN_MASK = 0xFFFFu;
+static const uint SEG_FACE_SHIFT = 16u;
+static const uint SEG_FACE_MASK = 0xFFu;
+static const uint SEG_STOPPED = 0x01000000u;
+
+/// One slot of the buffer as the scratch keeps it: one record per glyph,
+/// written and read whole.
+ShapeScratchGlyph scratchGlyph(uint i)
+{
+    ShapeScratchGlyph g;
+    g.gid = g_gid[i];
+    g.cluster = g_cluster[i];
+    g.props = g_props[i];
+    g.lig = g_lig[i];
+    g.xadv = g_xadv[i];
+    g.xoff = g_xoff[i];
+    g.yoff = g_yoff[i];
+    g.attach = g_attach[i];
+    return g;
+}
+
+void fromScratchGlyph(uint i, ShapeScratchGlyph g)
+{
+    g_gid[i] = g.gid;
+    g_cluster[i] = g.cluster;
+    g_props[i] = g.props;
+    g_lig[i] = g.lig;
+    g_xadv[i] = g.xadv;
+    g_xoff[i] = g.xoff;
+    g_yoff[i] = g.yoff;
+    g_attach[i] = g.attach;
+}
+
+uint segmentWord(uint len, uint face, bool ok)
+{
+    return (len & SEG_LEN_MASK) | ((face & SEG_FACE_MASK) << SEG_FACE_SHIFT)
+        | (ok ? 0u : SEG_STOPPED);
+}
+
+uint segmentFace(uint word)
+{
+    return (word >> SEG_FACE_SHIFT) & SEG_FACE_MASK;
+}
+
+/// The state every stage starts from: a fresh clock, an empty cache and
+/// nesting stack, and the run's forced features out of the dispatch's pool.
+/// The budget, flags and depth are a fresh string's; `resumeStage` replaces
+/// them with what the earlier stages left.
+void beginStage(ShapeParams params, ShapeRequest req)
+{
+    g_len = 0u;
+    g_cursor = 0u;
+    g_lookup_props = 0u;
+    g_rules_input = 0u;
+    g_rules_context = 0u;
+    g_ops = MAX_OPS;
+    // The wall-clock deadline: one read at the stage's entry, and `charge`
+    // re-reads every SHAPE_CLOCK_EVERY ops. Each stage has the whole
+    // deadline, because the time between two dispatches is not the run's.
+    g_clock_start = getRealtimeClockLow();
+    g_deadline = params.deadline_ticks;
+    g_clock_step = 0u;
+    g_flags = 0u;
+    g_depth_seen = 0u;
+    g_serial = 0u;
+    g_ok = true;
+    fr_depth = 0u;
+    fr_pushed = false;
+    sb_lookups = 0u;
+    sb_lookup = 0xFFFFFFFFu;
+    sb_count = 0xFFFFFFFFu;
+
+    // The run's forced features, out of the dispatch's pool. A word of zero is
+    // an empty slot, because no OpenType tag is zero.
+    uf_count = 0u;
+    let first = min(req.feature_start, MAX_SHAPE_FEATURES);
+    let want = min(req.feature_count, MAX_SHAPE_FEATURES - first);
+    for (uint i = 0u; i < want; ++i)
+    {
+        let at = first + i;
+        let word = params.features[at >> 2u][at & 3u];
+        if (word != 0u)
+        {
+            uf_word[uf_count] = word;
+            uf_count += 1u;
+        }
+    }
+}
+
+/// What the earlier stages left: the budget is the string's, not the stage's.
+void resumeStage(ShapeTables t, uint slot)
+{
+    g_ops = t.scratch[slot].ops;
+    g_flags = t.scratch[slot].flags;
+    g_depth_seen = t.scratch[slot].depth;
+}
+
+void endStage(ShapeTables t, uint slot)
+{
+    t.scratch[slot].ops = g_ops;
+    t.scratch[slot].flags = g_flags;
+    t.scratch[slot].depth = g_depth_seen;
+}
+
+/// The GSUB stages one segment runs: stage 0 (`rvrn`), then stage 1.
 ///
-/// Returns the segment's advance in 26.6; `written` moves on by the glyphs it
-/// emitted. Split out of `shapeRun` only so that the face's three lookup passes
-/// have one loop between them.
-int shapeSegment(
+/// A `static` rather than a literal 2 **on purpose**: with a constant trip
+/// count Slang unrolls the loop in `shapeSubstitute` and inlines the whole
+/// GSUB dispatch — every substitution walker in this file — once per stage.
+static uint g_gsub_stages = 2u;
+
+/// Stage 1: decode, cut into faces, map through `cmap`, classify, and run
+/// GSUB over each segment as it closes.
+///
+/// Each segment is built in the buffer from slot 0, substituted with its own
+/// face's GSUB, and appended to the scratch's glyph arrays behind the segments
+/// before it, with its entry in the segment table.
+public void shapeSubstitute(ShapeTables t, ShapeParams params, ShapeRequest req, uint slot)
+{
+    beginStage(params, req);
+    let a = otOpen(t.ot);
+    let header = otHeader(a);
+    let face_count = header.face_count;
+    let end = req.byte_start + req.byte_len;
+
+    uint segments = 0u;
+    uint written = 0u;
+    uint offset = req.byte_start;
+    uint segment_face = 0u;
+    uint segment_script = 0u;
+    bool have_segment = false;
+    bool finished = face_count == 0u;
+    bool full = false;
+
+    // `hb_form_clusters`, folded into the decode.
+    //
+    // HarfBuzz runs it once over the whole buffer before any lookup: every
+    // maximal group of one glyph and the **continuations** after it becomes one
+    // cluster, so a base and its marks, a ZWJ emoji sequence, a regional-
+    // indicator pair and a flag's tag characters all carry the cluster of the
+    // codepoint they hang off. Since a group's clusters are increasing, the
+    // minimum `merge_clusters` takes is the group's first — so a continuation
+    // taking the previous glyph's cluster at push time is the same answer for
+    // one compare instead of a pass.
+    //
+    // The three tests it needs — General_Category Mn/Mc/Me,
+    // Extended_Pictographic, and the emoji-modifier and regional-indicator
+    // ranges — are written out below as `scriptTagOf` is, until a property
+    // table replaces them.
+    //
+    // It is **per segment**, where HarfBuzz has no segments: a grapheme whose
+    // base and mark come from different faces starts a new group here. No
+    // common font does that for a script this shaper handles.
+    bool prev_continuation = false;
+    bool prev_regional = false;
+    bool zwj_open = false;
+
+    while (!finished)
+    {
+        uint codepoint = 0u;
+        uint cluster = 0u;
+        uint local = 0u;
+        uint face_index = 0u;
+        bool have_codepoint = false;
+
+        if (offset < end && !full)
+        {
+            uint consumed;
+            bool ok;
+            cluster = offset - req.byte_start;
+            codepoint = decodeUtf8(t, offset, end, consumed, ok);
+            offset += consumed;
+            if (!ok)
+            {
+                g_flags |= SHAPE_RUN_BAD_UTF8;
+            }
+            have_codepoint = true;
+            if (isDefaultIgnorable(codepoint))
+            {
+                // A joiner belongs to the run around it, not to a face of its
+                // own: it takes the current segment's face, or the primary's.
+                face_index = have_segment ? segment_face : 0u;
+                local = otGlyphFor(a, otFaceAt(a, face_index), codepoint);
+            }
+            else
+            {
+                face_index = faceFor(a, face_count, codepoint, local);
+            }
+        }
+        else
+        {
+            finished = true;
+        }
+
+        if ((!have_codepoint || (have_segment && face_index != segment_face))
+            && have_segment && g_len > 0u)
+        {
+            // The segment closes and is substituted.
+            let face = otFaceAt(a, segment_face);
+            let table = face.gsub_off;
+            g_cursor = 0u;
+            // One call site for the lookup pass, which is what keeps the GSUB
+            // dispatch from being inlined once per stage.
+            for (uint stage = 0u; stage < g_gsub_stages; ++stage)
+            {
+                if (table == 0u || !g_ok)
+                {
+                    continue;
+                }
+                collectStage(a, table, segment_script, stage, false);
+                let lookups = co_count;
+                for (uint i = 0u; i < lookups && g_ok; ++i)
+                {
+                    applyLookupPass(a, face, table, co_index[i], false,
+                                    co_rules_input[i], co_rules_context[i]);
+                }
+            }
+            // Every segment together fits `MAX_RUN_GLYPHS`, the most one run
+            // can write; what does not fit is dropped from the end.
+            uint keep = 0u;
+            for (uint i = 0u; i < g_len; ++i)
+            {
+                if (written + keep >= MAX_RUN_GLYPHS)
+                {
+                    g_flags |= SHAPE_RUN_TRUNCATED;
+                    break;
+                }
+                let at = written + keep;
+                if (at < MAX_RUN_GLYPHS)
+                {
+                    t.scratch[slot].glyphs[at & 255u] = scratchGlyph(i & 255u);
+                }
+                keep += 1u;
+            }
+            t.scratch[slot].segment[segments] = segmentWord(keep, segment_face, g_ok);
+            t.scratch[slot].script[segments] = segment_script;
+            segments += 1u;
+            written += keep;
+            g_len = 0u;
+            g_cursor = 0u;
+            g_ok = true;
+        }
+
+        if (!have_codepoint)
+        {
+            break;
+        }
+        if (g_len >= MAX_RUN_GLYPHS)
+        {
+            // The segment has more codepoints than a run has slots. What is
+            // decoded so far is shaped; the rest is not.
+            g_flags |= SHAPE_RUN_TRUNCATED;
+            full = true;
+            continue;
+        }
+        if (!have_segment || face_index != segment_face)
+        {
+            if (have_segment)
+            {
+                g_flags |= SHAPE_RUN_MULTI_FACE;
+            }
+            segment_face = face_index;
+            segment_script = 0u;
+            have_segment = true;
+        }
+        if (segment_script == 0u)
+        {
+            segment_script = scriptTagOf(codepoint);
+        }
+        // `form_clusters`' one question, in HarfBuzz's own order of tests. An
+        // ASCII codepoint, a letter and a space separator are never
+        // continuations, which is the early `continue` in its loop.
+        bool continuation = false;
+        bool regional = codepoint >= 0x1F1E6u && codepoint <= 0x1F1FFu;
+        if (codepoint >= 0x80u)
+        {
+            if (isCombiningMark(codepoint))
+            {
+                continuation = true;
+            }
+            else if (codepoint >= 0x1F3FBu && codepoint <= 0x1F3FFu)
+            {
+                // Emoji_Modifier: the skin tones.
+                continuation = true;
+            }
+            else if (regional)
+            {
+                // A regional indicator continues the one before it, but only
+                // in pairs — the second of a pair starts the next flag.
+                continuation = prev_regional && !prev_continuation;
+            }
+            else if (codepoint == 0x200Du)
+            {
+                continuation = true;
+            }
+            else if ((codepoint >= 0xFF9Eu && codepoint <= 0xFF9Fu)
+                     || (codepoint >= 0xE0020u && codepoint <= 0xE007Fu))
+            {
+                // Other_Grapheme_Extend that is not a mark: the halfwidth
+                // katakana sound marks and the tag characters a flag sequence
+                // is spelled with. ZWNJ is deliberately **not** here — keeping
+                // it separate gives more granular clusters, says HarfBuzz.
+                continuation = true;
+            }
+            else if (zwj_open && isExtendedPictographic(codepoint))
+            {
+                continuation = true;
+            }
+        }
+        zwj_open = codepoint == 0x200Du;
+        prev_regional = regional;
+
+        let slot_at = g_len;
+        g_gid[slot_at] = local;
+        // A segment's first glyph starts a cluster of its own.
+        g_cluster[slot_at] = (continuation && slot_at > 0u) ? g_cluster[slot_at - 1u] : cluster;
+        prev_continuation = continuation;
+        let segment = otFaceAt(a, face_index);
+        uint props;
+        if (gdefGlyphClasses(a, segment) != 0u)
+        {
+            props = glyphProps(a, segment, local);
+        }
+        else
+        {
+            // HarfBuzz's `hb_synthesize_glyph_classes`: a face with no
+            // GlyphClassDef gets its classes from Unicode instead — every
+            // non-spacing mark is a mark, everything else is a base. A
+            // default-ignorable is never a mark, whatever its category, because
+            // a lookup flag that ignores marks would then skip a joiner
+            // (Uniscribe does not, and Mongolian fonts without GDEF rely on it).
+            props = isNonSpacingMark(codepoint) && !isDefaultIgnorable(codepoint)
+                        ? PROPS_MARK
+                        : PROPS_BASE;
+        }
+        if (isDefaultIgnorable(codepoint))
+        {
+            props |= PROPS_IGNORABLE;
+            if (codepoint == 0x200Cu)
+            {
+                props |= PROPS_ZWNJ;
+            }
+            if (codepoint == 0x200Du)
+            {
+                props |= PROPS_ZWJ;
+            }
+            if (isHidden(codepoint))
+            {
+                props |= PROPS_HIDDEN;
+            }
+        }
+        g_props[slot_at] = props;
+        g_lig[slot_at] = 0u;
+        g_xadv[slot_at] = 0;
+        g_xoff[slot_at] = 0;
+        g_yoff[slot_at] = 0;
+        g_attach[slot_at] = 0u;
+        g_len = slot_at + 1u;
+    }
+
+    t.scratch[slot].glyph_count = written;
+    t.scratch[slot].segment_count = segments;
+    endStage(t, slot);
+}
+
+/// Stage 3: the advances every glyph starts with, then GPOS, segment by
+/// segment. GPOS moves glyphs and never adds or removes one.
+public void shapePosition(ShapeTables t, ShapeParams params, ShapeRequest req, uint slot)
+{
+    beginStage(params, req);
+    resumeStage(t, slot);
+    let a = otOpen(t.ot);
+    let count = min(t.scratch[slot].segment_count, MAX_RUN_GLYPHS);
+    let total = min(t.scratch[slot].glyph_count, MAX_RUN_GLYPHS);
+    uint base = 0u;
+    for (uint s = 0u; s < count; ++s)
+    {
+        let word = t.scratch[slot].segment[s];
+        let len = min(word & SEG_LEN_MASK, total - base);
+        let face = otFaceAt(a, segmentFace(word));
+        let script_tag = t.scratch[slot].script[s];
+        for (uint i = 0u; i < len; ++i)
+        {
+            fromScratchGlyph(i, t.scratch[slot].glyphs[base + i]);
+            g_xadv[i] = int(otAdvance(a, face, g_gid[i]));
+            g_xoff[i] = 0;
+            g_yoff[i] = 0;
+            g_attach[i] = 0u;
+        }
+        g_len = len;
+        g_cursor = 0u;
+        g_ok = (word & SEG_STOPPED) == 0u;
+        let table = face.gpos_off;
+        if (table != 0u && g_ok)
+        {
+            collectStage(a, table, script_tag, 1u, true);
+            let lookups = co_count;
+            for (uint i = 0u; i < lookups && g_ok; ++i)
+            {
+                applyLookupPass(a, face, table, co_index[i], true,
+                                co_rules_input[i], co_rules_context[i]);
+            }
+        }
+        for (uint i = 0u; i < len; ++i)
+        {
+            t.scratch[slot].glyphs[base + i] = scratchGlyph(i);
+        }
+        base += len;
+    }
+    endStage(t, slot);
+}
+
+/// The passes HarfBuzz runs after the lookups, then the segment written out in
+/// 26.6 at the request's size. Returns the segment's advance in 26.6;
+/// `written` moves on by the glyphs it emitted.
+int finishSegment(
     OtArena a,
     OtFace face,
     ShapeRequest req,
-    uint script_tag,
     int pen_26_6,
     inout uint written,
     uint cap,
     RWStructuredBuffer<ShapedGlyph> out_glyphs,
     uint glyph_capacity)
 {
-    // GSUB stage 0 (`rvrn`), GSUB stage 1, then GPOS — one call site for the
-    // lookup pass, which is what keeps the subtable dispatch from being inlined
-    // three times over.
-    for (uint pass = 0u; pass < g_passes; ++pass)
-    {
-        let gpos = pass == 2u;
-        let table = gpos ? face.gpos_off : face.gsub_off;
-        if (gpos)
-        {
-            // The advances every glyph starts with, before GPOS touches them.
-            for (uint i = 0u; i < g_len; ++i)
-            {
-                g_xadv[i] = int(otAdvance(a, face, g_gid[i]));
-                g_xoff[i] = 0;
-                g_yoff[i] = 0;
-                g_attach[i] = 0u;
-            }
-        }
-        if (table == 0u || !g_ok)
-        {
-            continue;
-        }
-        collectStage(a, table, script_tag, pass == 0u ? 0u : 1u, gpos);
-        let count = co_count;
-        for (uint i = 0u; i < count && g_ok; ++i)
-        {
-            applyLookupPass(a, face, table, co_index[i], gpos,
-                            co_rules_input[i], co_rules_context[i]);
-        }
-    }
-
-    // The three passes HarfBuzz runs after the lookups, in its order: mark
-    // widths zeroed by GDEF class, then default ignorables zeroed, then the
-    // attachment chains folded in.
+    // In HarfBuzz's order: mark widths zeroed by GDEF class, then default
+    // ignorables zeroed, then the attachment chains folded in.
     for (uint i = 0u; i < g_len; ++i)
     {
         if ((g_props[i] & PROPS_MARK) != 0u)
@@ -3246,266 +3615,50 @@ int shapeSegment(
     return roundAway(float(pen) * scale);
 }
 
-/// Shape one request: decode, cut into faces, substitute, position, write.
+/// Stage 4: the final passes and the output. Returns the run record; the
+/// glyphs go to `out_glyphs[req.out_start ..]`.
 ///
-/// Returns the run record; the glyphs go to `out_glyphs[req.out_start ..]`.
-public ShapeRun shapeRun(
+/// A segment boundary is where the pen crosses from one face's design units to
+/// the next face's, so each segment is scaled by its own upem.
+public ShapeRun shapeFinish(
     ShapeTables t,
     ShapeParams params,
     ShapeRequest req,
+    uint slot,
     RWStructuredBuffer<ShapedGlyph> out_glyphs,
     uint glyph_capacity)
 {
-    ShapeRun run;
-    run.glyph_count = 0u;
-    run.advance = 0;
-    run.flags = 0u;
-    run.depth = 0u;
-
+    beginStage(params, req);
+    resumeStage(t, slot);
     let a = otOpen(t.ot);
-    let header = otHeader(a);
-    let face_count = header.face_count;
-    if (face_count == 0u)
-    {
-        return run;
-    }
-
-    g_len = 0u;
-    g_cursor = 0u;
-    g_lookup_props = 0u;
-    g_rules_input = 0u;
-    g_rules_context = 0u;
-    g_ops = MAX_OPS;
-    // The wall-clock deadline: one read at entry, and `charge` re-reads
-    // every SHAPE_CLOCK_EVERY ops.
-    g_clock_start = getRealtimeClockLow();
-    g_deadline = params.deadline_ticks;
-    g_clock_step = 0u;
-    g_flags = 0u;
-    g_depth_seen = 0u;
-    g_serial = 0u;
-    g_ok = true;
-    fr_depth = 0u;
-    fr_pushed = false;
-    sb_lookups = 0u;
-    sb_lookup = 0xFFFFFFFFu;
-    sb_count = 0xFFFFFFFFu;
-
-    // The run's forced features, out of the dispatch's pool. A word of zero is
-    // an empty slot, because no OpenType tag is zero.
-    uf_count = 0u;
-    {
-        let first = min(req.feature_start, MAX_SHAPE_FEATURES);
-        let want = min(req.feature_count, MAX_SHAPE_FEATURES - first);
-        for (uint i = 0u; i < want; ++i)
-        {
-            let at = first + i;
-            let word = params.features[at >> 2u][at & 3u];
-            if (word != 0u)
-            {
-                uf_word[uf_count] = word;
-                uf_count += 1u;
-            }
-        }
-    }
-
+    let count = min(t.scratch[slot].segment_count, MAX_RUN_GLYPHS);
+    let total = min(t.scratch[slot].glyph_count, MAX_RUN_GLYPHS);
     let cap = min(req.out_cap, MAX_RUN_GLYPHS);
-    let end = req.byte_start + req.byte_len;
 
     // The pen, in 26.6 at the request's size, and the slot the next glyph goes
     // to. Both cross segment boundaries; everything else is a segment's own.
     int pen_26_6 = 0;
     uint written = 0u;
-
-    uint offset = req.byte_start;
-    uint segment_face = 0u;
-    uint segment_script = 0u;
-    bool have_segment = false;
-    bool finished = false;
-
-    // `hb_form_clusters`, folded into the decode.
-    //
-    // HarfBuzz runs it once over the whole buffer before any lookup: every
-    // maximal group of one glyph and the **continuations** after it becomes one
-    // cluster, so a base and its marks, a ZWJ emoji sequence, a regional-
-    // indicator pair and a flag's tag characters all carry the cluster of the
-    // codepoint they hang off. Since a group's clusters are increasing, the
-    // minimum `merge_clusters` takes is the group's first — so a continuation
-    // taking the previous glyph's cluster at push time is the same answer for
-    // one compare instead of a pass.
-    //
-    // The three tests it needs — General_Category Mn/Mc/Me,
-    // Extended_Pictographic, and the emoji-modifier and regional-indicator
-    // ranges — are written out below as `scriptTagOf` is, until a property
-    // table replaces them.
-    //
-    // It is **per segment**, where HarfBuzz has no segments: a grapheme whose
-    // base and mark come from different faces starts a new group here. No
-    // common font does that for a script this shaper handles.
-    bool prev_continuation = false;
-    bool prev_regional = false;
-    bool zwj_open = false;
-
-    while (!finished)
+    uint base = 0u;
+    for (uint s = 0u; s < count; ++s)
     {
-        uint codepoint = 0u;
-        uint cluster = 0u;
-        uint local = 0u;
-        uint face_index = 0u;
-        bool have_codepoint = false;
-
-        if (offset < end)
+        let word = t.scratch[slot].segment[s];
+        let len = min(word & SEG_LEN_MASK, total - base);
+        for (uint i = 0u; i < len; ++i)
         {
-            uint consumed;
-            bool ok;
-            cluster = offset - req.byte_start;
-            codepoint = decodeUtf8(t, offset, end, consumed, ok);
-            offset += consumed;
-            if (!ok)
-            {
-                g_flags |= SHAPE_RUN_BAD_UTF8;
-            }
-            have_codepoint = true;
-            if (isDefaultIgnorable(codepoint))
-            {
-                // A joiner belongs to the run around it, not to a face of its
-                // own: it takes the current segment's face, or the primary's.
-                face_index = have_segment ? segment_face : 0u;
-                local = otGlyphFor(a, otFaceAt(a, face_index), codepoint);
-            }
-            else
-            {
-                face_index = faceFor(a, face_count, codepoint, local);
-            }
+            fromScratchGlyph(i, t.scratch[slot].glyphs[base + i]);
         }
-        else
+        g_len = len;
+        base += len;
+        if (len == 0u)
         {
-            finished = true;
+            continue;
         }
-
-        if ((!have_codepoint || (have_segment && face_index != segment_face))
-            && have_segment && g_len > 0u)
-        {
-            pen_26_6 += shapeSegment(a, otFaceAt(a, segment_face), req, segment_script,
-                                     pen_26_6, written, cap, out_glyphs, glyph_capacity);
-            g_len = 0u;
-            g_cursor = 0u;
-            g_ok = true;
-        }
-
-        if (!have_codepoint)
-        {
-            break;
-        }
-        if (!have_segment || face_index != segment_face)
-        {
-            if (have_segment)
-            {
-                g_flags |= SHAPE_RUN_MULTI_FACE;
-            }
-            segment_face = face_index;
-            segment_script = 0u;
-            have_segment = true;
-        }
-        if (segment_script == 0u)
-        {
-            segment_script = scriptTagOf(codepoint);
-        }
-        if (g_len >= MAX_RUN_GLYPHS)
-        {
-            g_flags |= SHAPE_RUN_TRUNCATED;
-            break;
-        }
-        // `form_clusters`' one question, in HarfBuzz's own order of tests. An
-        // ASCII codepoint, a letter and a space separator are never
-        // continuations, which is the early `continue` in its loop.
-        bool continuation = false;
-        bool regional = codepoint >= 0x1F1E6u && codepoint <= 0x1F1FFu;
-        if (codepoint >= 0x80u)
-        {
-            if (isCombiningMark(codepoint))
-            {
-                continuation = true;
-            }
-            else if (codepoint >= 0x1F3FBu && codepoint <= 0x1F3FFu)
-            {
-                // Emoji_Modifier: the skin tones.
-                continuation = true;
-            }
-            else if (regional)
-            {
-                // A regional indicator continues the one before it, but only
-                // in pairs — the second of a pair starts the next flag.
-                continuation = prev_regional && !prev_continuation;
-            }
-            else if (codepoint == 0x200Du)
-            {
-                continuation = true;
-            }
-            else if ((codepoint >= 0xFF9Eu && codepoint <= 0xFF9Fu)
-                     || (codepoint >= 0xE0020u && codepoint <= 0xE007Fu))
-            {
-                // Other_Grapheme_Extend that is not a mark: the halfwidth
-                // katakana sound marks and the tag characters a flag sequence
-                // is spelled with. ZWNJ is deliberately **not** here — keeping
-                // it separate gives more granular clusters, says HarfBuzz.
-                continuation = true;
-            }
-            else if (zwj_open && isExtendedPictographic(codepoint))
-            {
-                continuation = true;
-            }
-        }
-        zwj_open = codepoint == 0x200Du;
-        prev_regional = regional;
-
-        let slot = g_len;
-        g_gid[slot] = local;
-        g_cluster[slot] = (continuation && slot > 0u) ? g_cluster[slot - 1u] : cluster;
-        prev_continuation = continuation;
-        let segment = otFaceAt(a, face_index);
-        uint props;
-        if (gdefGlyphClasses(a, segment) != 0u)
-        {
-            props = glyphProps(a, segment, local);
-        }
-        else
-        {
-            // HarfBuzz's `hb_synthesize_glyph_classes`: a face with no
-            // GlyphClassDef gets its classes from Unicode instead — every
-            // non-spacing mark is a mark, everything else is a base. A
-            // default-ignorable is never a mark, whatever its category, because
-            // a lookup flag that ignores marks would then skip a joiner
-            // (Uniscribe does not, and Mongolian fonts without GDEF rely on it).
-            props = isNonSpacingMark(codepoint) && !isDefaultIgnorable(codepoint)
-                        ? PROPS_MARK
-                        : PROPS_BASE;
-        }
-        if (isDefaultIgnorable(codepoint))
-        {
-            props |= PROPS_IGNORABLE;
-            if (codepoint == 0x200Cu)
-            {
-                props |= PROPS_ZWNJ;
-            }
-            if (codepoint == 0x200Du)
-            {
-                props |= PROPS_ZWJ;
-            }
-            if (isHidden(codepoint))
-            {
-                props |= PROPS_HIDDEN;
-            }
-        }
-        g_props[slot] = props;
-        g_lig[slot] = 0u;
-        g_xadv[slot] = 0;
-        g_xoff[slot] = 0;
-        g_yoff[slot] = 0;
-        g_attach[slot] = 0u;
-        g_len = slot + 1u;
+        pen_26_6 += finishSegment(a, otFaceAt(a, segmentFace(word)), req, pen_26_6, written,
+                                  cap, out_glyphs, glyph_capacity);
     }
 
+    ShapeRun run;
     run.glyph_count = written;
     run.advance = pen_26_6;
     run.flags = g_flags;

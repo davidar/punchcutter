@@ -64,7 +64,7 @@ abi_consts! {
 
     /// The arena layout version: a label. Both halves are compiled from one
     /// tree and the generated Slang is the real guard.
-    pub const SHAPE_ABI_VERSION: u32 = 4;
+    pub const SHAPE_ABI_VERSION: u32 = 5;
 
     /// Faces the directory holds. The primary, then one per fallback face a
     /// cover has opened; a consumer that has drawn sixteen scripts has a font
@@ -202,7 +202,7 @@ abi_consts! {
 /// guardrail whose whole job is to be loose.
 pub const SHAPE_DEADLINE_TICKS: u32 = 25_000_000;
 
-/// Threads per workgroup in the shaping kernel: one thread shapes one string.
+/// Threads per workgroup in every shaping stage: one thread shapes one string.
 ///
 /// Not in the generated module: every entry point that shapes (`shape_demo.slang`,
 /// a consumer's) spells its own `[numthreads]`, which cannot take a constant
@@ -394,6 +394,91 @@ abi_struct! {
 // SAFETY: repr(C), four 4-byte leaves, no padding, every bit pattern valid.
 unsafe impl Plain for ShapeRun {}
 
+abi_struct! {
+    /// One glyph of [`ShapeScratch`]: what the shaper knows of it between
+    /// two stages.
+    { #[repr(C)] #[derive(Clone, Copy, Debug, Default, PartialEq)] }
+    pub struct ShapeScratchGlyph {
+        /// The id in its segment's face.
+        pub gid: u32,
+        /// The byte offset of its cluster in the string.
+        pub cluster: u32,
+        /// The shaper's glyph properties.
+        pub props: u32,
+        /// Ligature id and component.
+        pub lig: u32,
+        /// The advance and the offsets, in design units.
+        pub xadv: i32,
+        pub xoff: i32,
+        pub yoff: i32,
+        /// The attachment chain.
+        pub attach: u32,
+    }
+}
+
+// SAFETY: repr(C), eight 4-byte leaves, no padding, every bit pattern valid.
+unsafe impl Plain for ShapeScratchGlyph {}
+
+abi_struct! {
+    /// One string's working state between two shaping stages: what one
+    /// dispatch leaves for the next (docs/arena.md, *The scratch buffer*).
+    ///
+    /// The host allocates one per request and never reads or writes one; the
+    /// stages index it by the request's index. Its contents mean something only
+    /// between the first stage and the last of one sequence.
+    ///
+    /// The arrays are `MAX_RUN_GLYPHS` long (256, spelled as a literal because
+    /// the generated Slang needs one). Every segment of a string lies back to
+    /// back in them, so a segment is at most `MAX_RUN_GLYPHS` glyphs and there
+    /// are at most that many segments.
+    { #[repr(C)] #[derive(Clone, Copy, Debug, PartialEq)] }
+    pub struct ShapeScratch {
+        /// Glyphs held, every segment together.
+        pub glyph_count: u32,
+        /// Segments in `segment` and `script`.
+        pub segment_count: u32,
+        /// What is left of the string's `MAX_OPS` budget.
+        pub ops: u32,
+        /// `SHAPE_RUN_*` so far.
+        pub flags: u32,
+        /// The deepest nesting level so far.
+        pub depth: u32,
+        pub _rsvd0: u32,
+        pub _rsvd1: u32,
+        pub _rsvd2: u32,
+        /// Per segment: its glyph count, its face and whether its lookups were
+        /// stopped, packed the way `shape.slang` packs them.
+        pub segment: [u32; 256],
+        /// Per segment: the OpenType script tag its lookups are selected by.
+        pub script: [u32; 256],
+        /// Per glyph, every segment back to back.
+        pub glyphs: [ShapeScratchGlyph; 256],
+    }
+}
+
+// SAFETY: repr(C), 4-byte leaves and arrays of them, no padding, every bit
+// pattern valid.
+unsafe impl Plain for ShapeScratch {}
+
+// The arrays above spell `MAX_RUN_GLYPHS` as a literal.
+const _: () = assert!(MAX_RUN_GLYPHS == 256);
+
+/// Bytes of one request's working state: the scratch buffer holds one
+/// [`ShapeScratch`] per request.
+pub const SHAPE_SCRATCH_BYTES: u64 = size_of::<ShapeScratch>() as u64;
+
+/// The shaping stages' entry points in `slang/modules/shape_demo.slang`, in
+/// the order a host dispatches them. A host's own entries call
+/// `shapeDecode`, `shapeSubstitute`, `shapePosition` and `shapeFinish` in the
+/// same order.
+pub const STAGE_ENTRIES: [&str; 3] = ["shape_substitute", "shape_position", "shape_finish"];
+
+/// The scratch buffer's size for `requests` strings, never zero.
+pub const fn scratch_bytes(requests: u32) -> u64 {
+    let requests = if requests == 0 { 1 } else { requests };
+    requests as u64 * SHAPE_SCRATCH_BYTES
+}
+
 // ---------------------------------------------------------------------------
 // The tables `slang/modules/shape_abi.slang` is rendered from
 // ---------------------------------------------------------------------------
@@ -452,6 +537,16 @@ const STRUCTS: &[AbiStruct] = &[
         bound: true,
         offsets: ShapeRun::offsets,
     },
+    AbiStruct {
+        decl: ShapeScratchGlyph::DECL,
+        bound: true,
+        offsets: ShapeScratchGlyph::offsets,
+    },
+    AbiStruct {
+        decl: ShapeScratch::DECL,
+        bound: true,
+        offsets: ShapeScratch::offsets,
+    },
 ];
 
 /// The generated module's own header comment.
@@ -462,9 +557,10 @@ const MODULE_DOC: &[&str] = &[
     "Both halves of this contract are built from one tree, so it has no binary",
     "stability to keep across builds — `SHAPE_ABI_VERSION` is a courtesy for",
     "whoever reads a buffer dump. What it does have is two *readers*:",
-    "`ot.slang` reads the front block, `shape.slang` reads the request and",
-    "writes the glyph, and both import this module rather than keep a",
-    "hand-written copy of these structs.",
+    "`ot.slang` reads the front block, `shape.slang` reads the request, keeps",
+    "its working state between stages in the scratch buffer and writes the",
+    "glyph, and both import this module rather than keep a hand-written copy",
+    "of these structs.",
     "",
     "The table bytes behind the directory are OpenType's own and are declared",
     "nowhere: the CPU sends the font's tables verbatim and the shader walks",

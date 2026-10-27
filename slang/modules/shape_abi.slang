@@ -9,9 +9,10 @@
 // Both halves of this contract are built from one tree, so it has no binary
 // stability to keep across builds — `SHAPE_ABI_VERSION` is a courtesy for
 // whoever reads a buffer dump. What it does have is two *readers*:
-// `ot.slang` reads the front block, `shape.slang` reads the request and
-// writes the glyph, and both import this module rather than keep a
-// hand-written copy of these structs.
+// `ot.slang` reads the front block, `shape.slang` reads the request, keeps
+// its working state between stages in the scratch buffer and writes the
+// glyph, and both import this module rather than keep a hand-written copy
+// of these structs.
 //
 // The table bytes behind the directory are OpenType's own and are declared
 // nowhere: the CPU sends the font's tables verbatim and the shader walks
@@ -26,7 +27,7 @@ module shape_abi;
 
 /// The arena layout version: a label. Both halves are compiled from one
 /// tree and the generated Slang is the real guard.
-public static const uint SHAPE_ABI_VERSION = 4u;
+public static const uint SHAPE_ABI_VERSION = 5u;
 
 /// Faces the directory holds. The primary, then one per fallback face a
 /// cover has opened; a consumer that has drawn sixteen scripts has a font
@@ -310,4 +311,59 @@ public struct ShapeRun
     public uint flags;        // 8
     /// The deepest nested-lookup level the run reached, so the conformance harness can report how deep a test corpus actually nests against `MAX_NESTING`.
     public uint depth;        // 12
+};
+
+/// One glyph of `ShapeScratch`: what the shaper knows of it between
+/// two stages.
+public struct ShapeScratchGlyph
+{
+    /// The id in its segment's face.
+    public uint gid;      // 0
+    /// The byte offset of its cluster in the string.
+    public uint cluster;  // 4
+    /// The shaper's glyph properties.
+    public uint props;    // 8
+    /// Ligature id and component.
+    public uint lig;      // 12
+    /// The advance and the offsets, in design units.
+    public int xadv;      // 16
+    public int xoff;      // 20
+    public int yoff;      // 24
+    /// The attachment chain.
+    public uint attach;   // 28
+};
+
+/// One string's working state between two shaping stages: what one
+/// dispatch leaves for the next (docs/arena.md, *The scratch buffer*).
+///
+/// The host allocates one per request and never reads or writes one; the
+/// stages index it by the request's index. Its contents mean something only
+/// between the first stage and the last of one sequence.
+///
+/// The arrays are `MAX_RUN_GLYPHS` long (256, spelled as a literal because
+/// the generated Slang needs one). Every segment of a string lies back to
+/// back in them, so a segment is at most `MAX_RUN_GLYPHS` glyphs and there
+/// are at most that many segments.
+public struct ShapeScratch
+{
+    /// Glyphs held, every segment together.
+    public uint glyph_count;               // 0
+    /// Segments in `segment` and `script`.
+    public uint segment_count;             // 4
+    /// What is left of the string's `MAX_OPS` budget.
+    public uint ops;                       // 8
+    /// `SHAPE_RUN_*` so far.
+    public uint flags;                     // 12
+    /// The deepest nesting level so far.
+    public uint depth;                     // 16
+    public uint _rsvd0;                    // 20
+    public uint _rsvd1;                    // 24
+    public uint _rsvd2;                    // 28
+    /// Per segment: its glyph count, its face and whether its lookups were
+    /// stopped, packed the way `shape.slang` packs them.
+    public uint segment[256];              // 32
+    /// Per segment: the OpenType script tag its lookups are selected by.
+    public uint script[256];               // 1056
+    /// Per glyph, every segment back to back.
+    public ShapeScratchGlyph glyphs[256];  // 2080
 };

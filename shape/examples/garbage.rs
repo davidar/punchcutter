@@ -400,7 +400,8 @@ struct Gpu {
     device: wgpu::Device,
     queue: wgpu::Queue,
     layout: wgpu::BindGroupLayout,
-    pipeline: wgpu::ComputePipeline,
+    /// One pipeline per shaping stage, in dispatch order.
+    stages: Vec<wgpu::ComputePipeline>,
     /// One thread, one clock read: what `measure_clock` dispatches.
     probe: wgpu::ComputePipeline,
     clock: punchcutter_core::gpu::ShaderClock,
@@ -459,14 +460,16 @@ impl Gpu {
             .filter(|dir| dir.is_dir())
             .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../slang/modules"))
             .join("shape_demo.slang");
-        let mut program = punchcutter_slang::compile_program(
-            &source,
-            &[punchcutter_shape::DEMO_ENTRY, "clock_probe"],
-            &Options::default(),
-        )
-        .map_err(|err| anyhow::anyhow!("{err}"))?;
-        let probe_spirv = program.entries.remove(1).spirv;
-        let spirv = program.entries.remove(0).spirv;
+        let mut entries: Vec<&str> = punchcutter_shape::STAGE_ENTRIES.to_vec();
+        entries.push("clock_probe");
+        let mut program =
+            punchcutter_slang::compile_program(&source, &entries, &Options::default())
+                .map_err(|err| anyhow::anyhow!("{err}"))?;
+        let probe_spirv = program
+            .entries
+            .pop()
+            .expect("the probe was asked for")
+            .spirv;
         let layout = create_layout(&device);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("punchcutter-shape-pl"),
@@ -474,14 +477,21 @@ impl Gpu {
             immediate_size: 0,
         });
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let pipeline = punchcutter_core::gpu::passthrough_pipeline(
-            &device,
-            &pipeline_layout,
-            "punchcutter-shape-pipeline",
-            "shape_batch",
-            &spirv,
-            (punchcutter_shape::SHAPE_WORKGROUP, 1, 1),
-        );
+        let stages = program
+            .entries
+            .iter()
+            .zip(punchcutter_shape::STAGE_ENTRIES)
+            .map(|(entry, name)| {
+                punchcutter_core::gpu::passthrough_pipeline(
+                    &device,
+                    &pipeline_layout,
+                    name,
+                    name,
+                    &entry.spirv,
+                    (punchcutter_shape::SHAPE_WORKGROUP, 1, 1),
+                )
+            })
+            .collect();
         let probe = punchcutter_core::gpu::passthrough_pipeline(
             &device,
             &pipeline_layout,
@@ -497,7 +507,7 @@ impl Gpu {
             device,
             queue,
             layout,
-            pipeline,
+            stages,
             probe,
             clock,
             deadline_ticks: 0,
@@ -539,6 +549,10 @@ impl Gpu {
         let requests = self.storage("shape-requests", bytes_of_slice(batch.requests()));
         let ot = self.storage("shape-ot", arena);
         let utf8 = self.storage("shape-utf8", words_bytes(&words));
+        let scratch = self.storage(
+            "shape-scratch",
+            &vec![0u8; punchcutter_shape::scratch_bytes(batch.len() as u32) as usize],
+        );
         let glyph_bytes = u64::from(batch.glyph_capacity()) * size_of::<ShapedGlyph>() as u64;
         let run_bytes = (batch.len().max(1) * size_of::<ShapeRun>()) as u64;
         let out_glyphs = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -569,6 +583,7 @@ impl Gpu {
                 entry(3, &utf8),
                 entry(4, &out_glyphs),
                 entry(5, &out_runs),
+                entry(6, &scratch),
             ],
         });
         self.queue.submit([]);
@@ -578,9 +593,11 @@ impl Gpu {
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(batch.workgroups(), 1, 1);
+            for stage in &self.stages {
+                pass.set_pipeline(stage);
+                pass.dispatch_workgroups(batch.workgroups(), 1, 1);
+            }
         }
         encoder.copy_buffer_to_buffer(&out_runs, 0, &run_readback, 0, run_bytes);
         self.queue.submit([encoder.finish()]);
@@ -601,10 +618,12 @@ impl Gpu {
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
             for _ in 0..repeats {
-                pass.dispatch_workgroups(batch.workgroups(), 1, 1);
+                for stage in &self.stages {
+                    pass.set_pipeline(stage);
+                    pass.dispatch_workgroups(batch.workgroups(), 1, 1);
+                }
             }
         }
         self.queue.submit([encoder.finish()]);
@@ -674,6 +693,7 @@ impl Gpu {
         let ro1 = self.storage("clock-ro1", &[0u8; 64]);
         let rw0 = self.storage("clock-rw0", &[0u8; 64]);
         let rw1 = self.storage("clock-rw1", &[0u8; 64]);
+        let rw2 = self.storage("clock-rw2", &[0u8; 64]);
         let out = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("clock-out"),
             size: size_of::<ShapeRun>() as u64,
@@ -696,6 +716,7 @@ impl Gpu {
                 entry(3, &rw0),
                 entry(4, &rw1),
                 entry(5, &out),
+                entry(6, &rw2),
             ],
         });
         let mut encoder = self.device.create_command_encoder(&Default::default());
@@ -778,6 +799,7 @@ fn create_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
             storage(3, false),
             storage(4, false),
             storage(5, false),
+            storage(6, false),
         ],
     })
 }

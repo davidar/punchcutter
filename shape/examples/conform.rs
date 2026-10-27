@@ -221,7 +221,7 @@ fn combining(ch: char) -> bool {
         || (0xFE20..=0xFE2F).contains(&c)
 }
 
-/// One (font, size): shape the whole corpus in one dispatch and compare.
+/// One (font, size): shape the whole corpus in one batch and compare.
 fn check_at(
     gpu: &Gpu,
     arena: &Arena,
@@ -348,7 +348,7 @@ fn check_at(
         }
     );
     println!(
-        "           upload {:.2} ms, one dispatch {:.2} ms, kernel {:.3} ms for {} strings \
+        "           upload {:.2} ms, one submit {:.2} ms, kernel {:.3} ms for {} strings \
          ({:.1} µs a string)",
         timing.upload_ms,
         timing.dispatch_ms,
@@ -1280,15 +1280,15 @@ impl<'a> Oracle<'a> {
 // Headless wgpu
 // ---------------------------------------------------------------------------
 
-/// What one dispatch produced, and what it cost.
+/// What one batch produced, and what it cost.
 struct Timing {
     glyphs: Vec<ShapedGlyph>,
     runs: Vec<ShapeRun>,
     upload_ms: f64,
-    /// One submit with one dispatch in it, wall clock to the fence. Dominated by
+    /// One submit with the stage dispatches in it, wall clock to the fence. Dominated by
     /// the submit itself at this size, which is why `pass_ms` exists.
     dispatch_ms: f64,
-    /// [`REPEATS`] dispatches in one submit, divided by [`REPEATS`]: the
+    /// [`REPEATS`] runs of the stages in one submit, divided by [`REPEATS`]: the
     /// marginal cost of shaping the batch once, with the submit latency spread
     /// thin. This is the number to quote as "kernel time".
     pass_ms: f64,
@@ -1309,7 +1309,8 @@ struct Gpu {
     device: wgpu::Device,
     queue: wgpu::Queue,
     layout: wgpu::BindGroupLayout,
-    pipeline: wgpu::ComputePipeline,
+    /// One pipeline per shaping stage, in dispatch order.
+    stages: Vec<wgpu::ComputePipeline>,
 }
 
 impl Gpu {
@@ -1365,8 +1366,9 @@ impl Gpu {
             );
         }
 
-        // Five storage buffers, the OpenType tables among them as one arena.
-        const STORAGE_BUFFERS: u32 = 5;
+        // Six storage buffers, the OpenType tables among them as one arena and
+        // the stages' scratch.
+        const STORAGE_BUFFERS: u32 = 6;
         let mut limits = wgpu::Limits::default();
         let ceiling = adapter.limits().max_storage_buffers_per_shader_stage;
         if ceiling < STORAGE_BUFFERS {
@@ -1401,12 +1403,21 @@ impl Gpu {
             .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../slang/modules"))
             .join("shape_demo.slang");
         let started = Instant::now();
-        let spirv =
-            punchcutter_slang::compile(&source, punchcutter_shape::DEMO_ENTRY, &Options::default())
-                .map_err(|err| anyhow::anyhow!("{err}"))?;
+        let program = punchcutter_slang::compile_program(
+            &source,
+            &punchcutter_shape::STAGE_ENTRIES,
+            &Options::default(),
+        )
+        .map_err(|err| anyhow::anyhow!("{err}"))?;
         println!(
-            "shader: {} KiB of SPIR-V in {:.0} ms",
-            spirv.len().div_ceil(1024),
+            "shader: {} KiB of SPIR-V in {} stages in {:.0} ms",
+            program
+                .entries
+                .iter()
+                .map(|entry| entry.spirv.len())
+                .sum::<usize>()
+                .div_ceil(1024),
+            program.entries.len(),
             started.elapsed().as_secs_f64() * 1e3
         );
 
@@ -1421,14 +1432,23 @@ impl Gpu {
         // goes up inside an error scope rather than through the device's
         // uncaptured-error handler, which panics.
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let pipeline = punchcutter_core::gpu::passthrough_pipeline(
-            &device,
-            &pipeline_layout,
-            "punchcutter-shape-pipeline",
-            "shape_batch",
-            &spirv,
-            (punchcutter_shape::SHAPE_WORKGROUP, 1, 1),
-        );
+        let mut stages = Vec::new();
+        for (entry, name) in program.entries.iter().zip(punchcutter_shape::STAGE_ENTRIES) {
+            let started = Instant::now();
+            stages.push(punchcutter_core::gpu::passthrough_pipeline(
+                &device,
+                &pipeline_layout,
+                name,
+                name,
+                &entry.spirv,
+                (punchcutter_shape::SHAPE_WORKGROUP, 1, 1),
+            ));
+            println!(
+                "pipeline {name}: {} KiB, created in {:.0} ms",
+                entry.spirv.len().div_ceil(1024),
+                started.elapsed().as_secs_f64() * 1e3
+            );
+        }
         if let Some(err) = pollster::block_on(scope.pop()) {
             bail!("wgpu rejected the shaping module: {err}");
         }
@@ -1437,7 +1457,7 @@ impl Gpu {
             device,
             queue,
             layout,
-            pipeline,
+            stages,
         })
     }
 
@@ -1474,6 +1494,12 @@ impl Gpu {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
+        let scratch = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("shape-scratch"),
+            size: punchcutter_shape::scratch_bytes(batch.len() as u32),
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
         let glyph_readback = self.readback("shape-glyph-readback", glyph_bytes);
         let run_readback = self.readback("shape-run-readback", run_bytes);
 
@@ -1487,6 +1513,7 @@ impl Gpu {
                 entry(3, &utf8),
                 entry(4, &out_glyphs),
                 entry(5, &out_runs),
+                entry(6, &scratch),
             ],
         });
         self.queue.submit([]);
@@ -1506,9 +1533,11 @@ impl Gpu {
                 label: Some("shape-pass"),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(batch.workgroups(), 1, 1);
+            for stage in &self.stages {
+                pass.set_pipeline(stage);
+                pass.dispatch_workgroups(batch.workgroups(), 1, 1);
+            }
         }
         encoder.copy_buffer_to_buffer(&out_glyphs, 0, &glyph_readback, 0, glyph_bytes);
         encoder.copy_buffer_to_buffer(&out_runs, 0, &run_readback, 0, run_bytes);
@@ -1533,10 +1562,12 @@ impl Gpu {
                 label: Some("shape-timing-pass"),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
             for _ in 0..repeats {
-                pass.dispatch_workgroups(batch.workgroups(), 1, 1);
+                for stage in &self.stages {
+                    pass.set_pipeline(stage);
+                    pass.dispatch_workgroups(batch.workgroups(), 1, 1);
+                }
             }
         }
         self.queue.submit([encoder.finish()]);
@@ -1663,6 +1694,8 @@ fn create_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
             storage(3, false),
             storage(4, false),
             storage(5, false),
+            // The stages' working state, one `ShapeScratch` per request.
+            storage(6, false),
         ],
     })
 }
