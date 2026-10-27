@@ -129,12 +129,15 @@
 //   * `applySubtables` has **one call site**, and so does `applyLookupPass`,
 //     and inside `applySubtables` each walker is called once: the three
 //     contextual types and their formats share one matching body, reached
-//     from one place whether the table is GSUB or GPOS. Every extra call site
-//     is another copy of a walker, its matchers and both iterators;
+//     from one place whether the table is GSUB or GPOS. A rule's input,
+//     lookahead and backtrack are matched by one body (`matchSequence`) in a
+//     loop, and both directions of the skipping iterator are one body
+//     (`iterStep`). Every extra call site is another copy of a walker, its
+//     matcher and the iterator;
 //   * `otByte` is branchless, because it is inlined about three thousand times
 //     and a bounds `if` in it would be three thousand basic blocks.
 //
-// The result is about 1 MB of SPIR-V for one entry point that shapes, and
+// The result is about 0.9 MB of SPIR-V for one entry point that shapes, and
 // about three seconds of Slang. Both are large, both are measured, and neither
 // is an accident. The driver's compile of that module is what a cold start
 // waits for, and it scales with the copies rather than with the bytes.
@@ -703,62 +706,21 @@ bool contextMatches(OtArena a, uint at, uint kind, uint datum, uint table)
     return covered(a, datum, g_gid[at]);
 }
 
-/// `skipping_iterator_t::next`: the first position past `from` that matches, or
-/// −1 when a non-skippable glyph fails the test first.
+/// `skipping_iterator_t::next`, or `prev` when `backward`: the first position
+/// past `from` in that direction that matches, or −1 when a non-skippable
+/// glyph fails the test first.
 ///
-/// With `kind == 3` there is no glyph test, so the answer is the first SKIP_NO
-/// glyph and every skippable one is walked past.
-int iterNext(OtArena a, OtFace face, uint from, uint lookup_props, uint rules,
-             uint kind, uint datum, uint table)
-{
-    uint at = from;
-    while (at + 1u < g_len)
-    {
-        at += 1u;
-        let skip = maySkip(a, face, at, lookup_props, rules);
-        if (skip == SKIP_YES)
-        {
-            continue;
-        }
-        if (kind == 3u)
-        {
-            if (skip == SKIP_NO)
-            {
-                return int(at);
-            }
-            continue;
-        }
-        if (contextMatches(a, at, kind, datum, table))
-        {
-            return int(at);
-        }
-        if (skip == SKIP_NO)
-        {
-            return -1;
-        }
-    }
-    return -1;
-}
-
-/// And backwards.
-int iterPrev(OtArena a, OtFace face, uint from, uint lookup_props, uint rules,
+/// One body for both directions, so the contextual walker inlines it once.
+int iterStep(OtArena a, OtFace face, uint from, bool backward, uint lookup_props, uint rules,
              uint kind, uint datum, uint table)
 {
     int at = int(from);
-    while (at > 0)
+    while (backward ? at > 0 : uint(at) + 1u < g_len)
     {
-        at -= 1;
+        at += backward ? -1 : 1;
         let skip = maySkip(a, face, uint(at), lookup_props, rules);
         if (skip == SKIP_YES)
         {
-            continue;
-        }
-        if (kind == 3u)
-        {
-            if (skip == SKIP_NO)
-            {
-                return at;
-            }
             continue;
         }
         if (contextMatches(a, uint(at), kind, datum, table))
@@ -773,7 +735,7 @@ int iterPrev(OtArena a, OtFace face, uint from, uint lookup_props, uint rules,
     return -1;
 }
 
-/// `iterNext` with no glyph test (`kind == 3`): the first position past `from`
+/// `iterStep` forwards with no glyph test: the first position past `from`
 /// that is not skipped, with every skippable one walked past.
 int nextVisible(OtArena a, OtFace face, uint from, uint lookup_props, uint rules)
 {
@@ -973,39 +935,69 @@ void removeAt(uint at, uint count)
 // Matching a contextual rule
 // ---------------------------------------------------------------------------
 
-/// `match_input`: the positions of a rule's `count` input glyphs, the first
-/// being the cursor, into `mp_pos`; `mp_end` and `mp_total` come with them.
-/// False when the sequence does not match.
+/// What `matchSequence` matches.
+static const uint SEQ_INPUT = 0u;
+static const uint SEQ_LOOKAHEAD = 1u;
+static const uint SEQ_BACKTRACK = 2u;
+
+/// One of a rule's three sequences, HarfBuzz's `match_input`,
+/// `match_lookahead` and `match_backtrack` as one body.
 ///
-/// `datum_at` is where the input values start, two bytes each, beginning with
-/// the *second* glyph. For `kind == 2` the values are offsets from `base`.
-bool matchInput(OtArena a, OtFace face, uint count, uint datum_at, uint kind,
-                uint table, uint base)
+/// * `SEQ_INPUT`: the positions of the rule's `count` input glyphs, the first
+///   being the cursor, into `mp_pos`; `mp_end` and `mp_total` come with them.
+///   `datum_at` is where the input values start, two bytes each, beginning
+///   with the *second* glyph.
+/// * `SEQ_LOOKAHEAD`: `count` glyphs at or after `mp_end`, forwards. The
+///   iterator starts one before it, because a step comes first.
+/// * `SEQ_BACKTRACK`: `count` glyphs before the cursor, in the order the
+///   table states them (which is away from the cursor).
+///
+/// For `kind == 2` the values are offsets from `base`. False when the
+/// sequence does not match. One body because each copy of it is a copy of the
+/// iterator, inlined.
+bool matchSequence(OtArena a, OtFace face, uint seq, uint count, uint datum_at, uint kind,
+                   uint table, uint base)
 {
-    mp_pos[0] = g_cursor;
-    mp_end = g_cursor + 1u;
-    mp_total = ligNumComps(g_props[g_cursor], g_lig[g_cursor]);
-    if (count > MAX_CONTEXT)
-    {
-        g_flags |= SHAPE_RUN_UNSUPPORTED;
-        return false;
-    }
-
-    let first_lig_id = ligId(g_lig[g_cursor]);
-    let first_lig_comp = ligComp(g_lig[g_cursor]);
-
+    let input = seq == SEQ_INPUT;
+    let backward = seq == SEQ_BACKTRACK;
+    let rules = input ? g_rules_input : g_rules_context;
     uint at = g_cursor;
-    for (uint i = 1u; i < count; ++i)
+    uint steps = count;
+    uint first_lig_id = 0u;
+    uint first_lig_comp = 0u;
+    if (input)
     {
-        let datum = be16(a, datum_at + (i - 1u) * 2u);
+        mp_pos[0] = g_cursor;
+        mp_end = g_cursor + 1u;
+        mp_total = ligNumComps(g_props[g_cursor], g_lig[g_cursor]);
+        if (count > MAX_CONTEXT)
+        {
+            g_flags |= SHAPE_RUN_UNSUPPORTED;
+            return false;
+        }
+        first_lig_id = ligId(g_lig[g_cursor]);
+        first_lig_comp = ligComp(g_lig[g_cursor]);
+        steps = count == 0u ? 0u : count - 1u;
+    }
+    else if (!backward)
+    {
+        at = mp_end == 0u ? 0u : mp_end - 1u;
+    }
+    for (uint i = 0u; i < steps; ++i)
+    {
+        let datum = be16(a, datum_at + i * 2u);
         let value = kind == 2u ? base + datum : datum;
-        let found = iterNext(a, face, at, g_lookup_props, g_rules_input, kind, value, table);
+        let found = iterStep(a, face, at, backward, g_lookup_props, rules, kind, value, table);
         if (found < 0)
         {
             return false;
         }
         at = uint(found);
-        mp_pos[i] = at;
+        if (!input)
+        {
+            continue;
+        }
+        mp_pos[i + 1u] = at;
 
         // HarfBuzz's rule for ligating glyphs that are already components of an
         // earlier ligature: either they all belong to the same component of the
@@ -1028,49 +1020,18 @@ bool matchInput(OtArena a, OtFace face, uint count, uint datum_at, uint kind,
         }
         mp_total += ligNumComps(g_props[at], g_lig[at]);
     }
-    mp_end = at + 1u;
-    return true;
-}
-
-/// `match_backtrack`: `count` glyphs before the cursor, in the order the table
-/// states them (which is away from the cursor).
-bool matchBacktrack(OtArena a, OtFace face, uint count, uint datum_at, uint kind,
-                    uint table, uint base)
-{
-    uint at = g_cursor;
-    for (uint i = 0u; i < count; ++i)
+    if (input)
     {
-        let datum = be16(a, datum_at + i * 2u);
-        let value = kind == 2u ? base + datum : datum;
-        let found = iterPrev(a, face, at, g_lookup_props, g_rules_context, kind, value, table);
-        if (found < 0)
-        {
-            return false;
-        }
-        at = uint(found);
+        mp_end = at + 1u;
     }
     return true;
 }
 
-/// `match_lookahead`: `count` glyphs at or after `match_end`, forwards. The
-/// iterator starts one before it, because `next()` steps first.
-bool matchLookahead(OtArena a, OtFace face, uint count, uint datum_at, uint kind,
-                    uint table, uint base, uint match_end)
-{
-    uint at = match_end == 0u ? 0u : match_end - 1u;
-    for (uint i = 0u; i < count; ++i)
-    {
-        let datum = be16(a, datum_at + i * 2u);
-        let value = kind == 2u ? base + datum : datum;
-        let found = iterNext(a, face, at, g_lookup_props, g_rules_context, kind, value, table);
-        if (found < 0)
-        {
-            return false;
-        }
-        at = uint(found);
-    }
-    return true;
-}
+/// The three sequences a contextual walker asks for, as one loop with one call.
+///
+/// A `static` trip count, for the reason `g_passes` is one: a literal
+/// would be unrolled, and the matcher inlined three times.
+static uint g_sequences = 3u;
 
 /// `ligate_input`: rewrite the `count` glyphs `mp_pos` names into one ligature.
 ///
@@ -1321,7 +1282,7 @@ bool gsubSimple(OtArena a, OtFace face, uint sub, uint type)
         {
             continue;
         }
-        if (!matchInput(a, face, comps, liga + 4u, 0u, 0u, 0u))
+        if (!matchSequence(a, face, SEQ_INPUT, comps, liga + 4u, 0u, 0u, 0u))
         {
             continue;
         }
@@ -1860,8 +1821,8 @@ static const uint CTX_REVERSE = 2u;
 /// the input array rather than taken out of it.
 ///
 /// Written as one body on purpose: Slang inlines every function that takes a
-/// descriptor, so a second copy of this block is a second copy of `matchInput`,
-/// `matchLookahead`, `matchBacktrack` and both iterators.
+/// descriptor, so a second copy of this block is a second copy of
+/// `matchSequence` and the iterator.
 ///
 /// The order the three sequences are matched in is HarfBuzz's: input,
 /// lookahead, backtrack. It matters, because the first failure decides.
@@ -1994,20 +1955,31 @@ bool applyContextual(OtArena a, OtFace face, uint sub, uint what)
         {
             return false;
         }
-        if (!matchInput(a, face, input_count, input_at + first_in_array * 2u, kind,
-                        input_table, base))
+        bool matched = true;
+        for (uint seq = 0u; seq < g_sequences && matched; ++seq)
+        {
+            uint seq_count = input_count;
+            uint seq_at = input_at + first_in_array * 2u;
+            uint seq_table = input_table;
+            if (seq == SEQ_LOOKAHEAD)
+            {
+                seq_count = ahead_count;
+                seq_at = ahead_at;
+                seq_table = ahead_table;
+            }
+            else if (seq == SEQ_BACKTRACK)
+            {
+                seq_count = back_count;
+                seq_at = back_at;
+                seq_table = back_table;
+            }
+            matched = matchSequence(a, face, seq, seq_count, seq_at, kind, seq_table, base);
+        }
+        if (!matched)
         {
             continue;
         }
         let match_end = mp_end;
-        if (!matchLookahead(a, face, ahead_count, ahead_at, kind, ahead_table, base, match_end))
-        {
-            continue;
-        }
-        if (!matchBacktrack(a, face, back_count, back_at, kind, back_table, base))
-        {
-            continue;
-        }
         if (reverse)
         {
             if (uint(index) >= lookups)
@@ -2130,7 +2102,7 @@ bool applySubtables(OtArena a, OtFace face, uint lookups, uint lookup_index, boo
         // so that it has one call site here. GSUB 5 and GPOS 7 are the same
         // Context subtable, GSUB 6 and GPOS 8 the same ChainContext, and
         // GSUB 8 matches the same way; a call under each branch would inline
-        // the walker, its matchers and both iterators twice, which is a third
+        // the walker, its matcher and the iterator twice, which is a third
         // of the module and about a fifth of the driver's compile time.
         bool hit = false;
         let context = gpos ? real == 7u : real == 5u;

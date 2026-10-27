@@ -53,6 +53,35 @@ shaped every frame costs its whole walk every frame.
   140 ms. A host that shows text over time should do this before its first
   visible frame.
 
+## What a cold start waits for
+
+On a machine whose driver has never seen the shaper, the first shaping waits
+for the driver to compile it. That compile, not Slang's, is the cost.
+
+- **Measure it with the shader cache off.**
+
+  ```text
+  MESA_SHADER_CACHE_DISABLE=true cargo run --locked --release -p punchcutter-shape --example coldstart
+  ```
+
+  It prints each pipeline's creation and first dispatch. RADV compiles at
+  creation; lavapipe compiles at the first dispatch. Run it three times and
+  keep the median, and only while `/proc/loadavg` is below 2.
+- **The numbers.** On an integrated Radeon 780M (RADV, Mesa 26.2.3), the one
+  shaping pipeline takes about 3.3 s to create. On lavapipe it takes 1.0 s to
+  create and 4.0 s at the first dispatch. Slang's own compile is about 3 s and
+  happens once per build on the host.
+- **The driver's time follows the inlined copies, not the bytes.** RADV
+  wants about 520 vector registers for the shaper against 256 the hardware
+  has, and spends most of the compile on spilling. Halving the SPIR-V with
+  Slang's `-O2` or `spirv-opt -O` doubles RADV's time. Fewer call sites of a
+  walker, a matcher or the iterator is what shortens it
+  (`slang/modules/shape.slang`, *WHAT SLANGC DOES WITH THIS*).
+- **Build the pipeline off the critical path.** A host that creates the
+  shaper's pipeline on a worker thread, or before its first frame, shows its
+  first frame without waiting for it. A warm Mesa shader cache makes the next
+  start take tens of milliseconds.
+
 ## Work done one thread per item
 
 Anything done by one thread per string, paragraph or block has the same
