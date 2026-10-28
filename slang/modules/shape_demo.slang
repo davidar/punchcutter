@@ -72,7 +72,7 @@ ShapeTables tables()
 // The scratch slot is the request's index.
 
 [shader("compute")]
-[numthreads(64, 1, 1)]
+[numthreads(128, 1, 1)]
 void shape_substitute(uint3 gid: SV_DispatchThreadID)
 {
     if (gid.x < params.request_count)
@@ -82,7 +82,7 @@ void shape_substitute(uint3 gid: SV_DispatchThreadID)
 }
 
 [shader("compute")]
-[numthreads(64, 1, 1)]
+[numthreads(128, 1, 1)]
 void shape_position(uint3 gid: SV_DispatchThreadID)
 {
     if (gid.x < params.request_count)
@@ -92,7 +92,7 @@ void shape_position(uint3 gid: SV_DispatchThreadID)
 }
 
 [shader("compute")]
-[numthreads(64, 1, 1)]
+[numthreads(128, 1, 1)]
 void shape_finish(uint3 gid: SV_DispatchThreadID)
 {
     if (gid.x < params.request_count)
