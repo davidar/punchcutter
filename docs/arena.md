@@ -197,9 +197,24 @@ branching around the shaper. A host with one buffer sets all three to it. The
 strings buffer is read-write only so that a host can compose bytes into it in
 an earlier pass; the shaper never writes to it.
 
-One thread shapes one string, in workgroups of `SHAPE_WORKGROUP` (64).
+One thread shapes one string, in workgroups of `SHAPE_WORKGROUP` (128).
 `punchcutter_shape::Batch` packs the strings, the requests and the feature
 pool, and gives each string `min(bytes * 4 + 8, MAX_RUN_GLYPHS)` glyph slots.
+
+### Workgroup size
+
+Every entry point that shapes declares more than 64 threads, so that a
+workgroup is more than one wave on AMD hardware. The shaper spills hundreds
+of registers, and Mesa's ACO compiler (26.1 and later) spills registers into
+shared memory when a workgroup is a single wave. Up to and including Mesa
+26.2 its scheduler can reorder those spills, which gives wrong shaping
+results at default settings on RADV. The fix is the Mesa commit "aco: give
+LDS spills and reloads memory_sync_info". Two waves per workgroup keep the
+spills in scratch on every AMD GPU and every Mesa version, for about two
+percent more scratch and no change to occupancy. A consumer that writes its
+own entry point around `shapeRun` must keep the same rule: `[numthreads(1,
+1, 1)]` is a single wave too. Once the fixed driver is the one you ship to,
+64 or 1 is fine again.
 
 ### What a dispatch costs
 

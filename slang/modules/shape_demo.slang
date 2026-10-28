@@ -55,9 +55,10 @@ ShapeTables tables()
 }
 
 /// One thread, one string. `SHAPE_WORKGROUP` in `shape/src/abi.rs` mirrors the
-/// 64 below; `Batch::workgroups` divides by it.
+/// 128 below; `Batch::workgroups` divides by it. Two waves, not one, on
+/// purpose: docs/arena.md, *Workgroup size*.
 [shader("compute")]
-[numthreads(64, 1, 1)]
+[numthreads(128, 1, 1)]
 void shape_batch(uint3 gid: SV_DispatchThreadID)
 {
     let index = gid.x;

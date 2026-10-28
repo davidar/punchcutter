@@ -62,6 +62,13 @@ buffers are built, `HVAR` for advances, and the item variation store for
 Today a variable font is read at its default instance on both sides. This
 matches what harfrust does at default coordinates.
 
+## Workgroup size
+
+The shaping entry points run two waves per workgroup to stay off a Mesa ACO
+path that gives wrong results (docs/arena.md, *Workgroup size*). When the
+fixed driver is common, a single wave is fine again and the dispatch can go
+back to one.
+
 ## Speed
 
 The shaper runs one thread per string, and a wave of threads shaping different

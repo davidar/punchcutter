@@ -207,7 +207,11 @@ pub const SHAPE_DEADLINE_TICKS: u32 = 25_000_000;
 /// Not in the generated module: every entry point that shapes (`shape_demo.slang`,
 /// a consumer's) spells its own `[numthreads]`, which cannot take a constant
 /// anyway.
-pub const SHAPE_WORKGROUP: u32 = 64;
+///
+/// 128 is two AMD waves. Keep every shaping entry point above one wave
+/// (more than 64 threads) until the driver fix described in docs/arena.md,
+/// *Workgroup size*, is in the drivers you ship to.
+pub const SHAPE_WORKGROUP: u32 = 128;
 
 abi_struct! {
     /// The arena's front block: what the directory behind it holds.
